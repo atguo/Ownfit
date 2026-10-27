@@ -1,0 +1,14 @@
+{
+  "name": "@outfit/contract",
+  "version": "0.0.0-draft",
+  "description": "搭配业务契约与共享校验：APP 与 A 线实验共用，M3 前出草案、验收冻结 v1（开发计划 §6.3）",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3"
+  },
+  "private": true
+}
