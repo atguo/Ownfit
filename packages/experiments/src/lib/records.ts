@@ -20,6 +20,8 @@ export interface ExperimentRecord {
   model: string;
   /** 输入样本的相对引用（相对 packages/experiments），如 samples/wardrobe/knit-01.jpg */
   inputRefs: string[];
+  /** 生成产物落盘后的相对引用（生成图 URL 有时效，必须当场下载保存） */
+  outputRefs?: string[];
   ok: boolean;
   latencyMs: number;
   /** 失败时的错误类别与摘要（不含凭证） */
@@ -46,3 +48,38 @@ export function appendRecord(workflow: string, record: Omit<ExperimentRecord, 't
 export function recordsPathFor(workflow: string): string {
   return path.relative(pkgRoot, path.join(recordsRoot, workflow));
 }
+
+/** 找到某输入样本最近一次带解析结果的记录（如 A-衣物理解 → 上身预览 prompt 的管线） */
+export function findLatestParsed(
+  workflow: string,
+  inputRef: string,
+): { ts: string; parsed: unknown; model: string } | null {
+  const dir = path.join(recordsRoot, workflow);
+  if (!fs.existsSync(dir)) return null;
+  let latest: { ts: string; parsed: unknown; model: string } | null = null;
+  for (const file of fs.readdirSync(dir)) {
+    if (!file.endsWith('.jsonl')) continue;
+    const lines = fs.readFileSync(path.join(dir, file), 'utf-8').split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line) as {
+          ts: string;
+          inputRefs?: string[];
+          ok?: boolean;
+          parsed?: unknown;
+          model?: string;
+        };
+        if (record.ok && record.parsed && record.inputRefs?.includes(inputRef)) {
+          if (!latest || record.ts > latest.ts) {
+            latest = { ts: record.ts, parsed: record.parsed, model: record.model ?? '' };
+          }
+        }
+      } catch {
+        // 单行损坏跳过，不影响其余记录
+      }
+    }
+  }
+  return latest;
+}
+
