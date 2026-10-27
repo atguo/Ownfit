@@ -7,7 +7,7 @@ A 工作线（AI 可行性与试穿验证）的实验脚本位置：衣物理解
 | 工作流 | 状态 |
 | --- | --- |
 | A-衣物理解 | 脚本就绪（`src/garment-understanding/`），等真实样本 |
-| A-上身预览 | 准备中（`src/try-on-preview/`：生成服务选型见 `src/try-on-preview/PROVIDERS.md`，输入组织已定义） |
+| A-上身预览 | **脚本就绪，选型已定 MiniMax `image-01`**（`src/try-on-preview/`；人物参考照就位即可跑，服装描述走 A1 记录或 `--desc`） |
 | A-搭配推荐 | 顺延（衣物理解与上身预览为必要能力先行；顺延原因见根 AGENTS.md §8） |
 
 ## 首次使用

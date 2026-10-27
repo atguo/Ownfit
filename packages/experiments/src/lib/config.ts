@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-export type Capability = 'text' | 'vision';
+export type Capability = 'text' | 'vision' | 'image_gen';
 
 export interface ServiceProfile {
   name: string;
@@ -44,7 +44,7 @@ function parseCapabilities(raw: string | undefined): Capability[] {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  return list.filter((c): c is Capability => c === 'text' || c === 'vision');
+  return list.filter((c): c is Capability => c === 'text' || c === 'vision' || c === 'image_gen');
 }
 
 function readProfile(env: Record<string, string>, name: string): ServiceProfile | null {
@@ -68,7 +68,7 @@ export function loadConfig(): AppConfig {
   if (cached) return cached;
   const env = { ...readEnvFile() };
   const profiles: Record<string, ServiceProfile> = {};
-  for (const name of ['glm', 'deepseek']) {
+  for (const name of ['glm', 'deepseek', 'minimax']) {
     const profile = readProfile(env, name);
     if (profile) profiles[name] = profile;
   }
