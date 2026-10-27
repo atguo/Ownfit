@@ -1,4 +1,4 @@
-# @outfit/contract
+# @ownfit/contract
 
 搭配业务契约与共享校验。消费方：`mobile/`（界面与业务状态）、`packages/experiments/`（A 线真实模型样本校验）。
 
