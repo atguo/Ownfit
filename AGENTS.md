@@ -137,7 +137,9 @@ RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `p
 
 工程框架已于 2026-10-27 初始化（pnpm workspace，Expo SDK 58；类型检查与 Metro 打包验证通过），同日确定 Android 优先（真机 OPPO Find X9 Pro）、导航采用 expo-router，Git 远程为 github.com/atguo/Ownfit。同日搭成 Android 调试环境并首次本机构建通过：`expo-dev-client` 接入，`expo prebuild` 生成 `mobile/android/`（git 忽略），`gradlew assembleDebug` 产出 debug APK；经无线 adb（手机与电脑同 Wi-Fi 网段，mDNS 自动发现）装入真机，完整链路验证通过；USB 数据线连接始终不通（疑似充电线/接口问题，未解决，当前以无线调试替代）。机器级构建要点：Gradle 发行版经华为镜像播种进 wrapper 缓存；Maven 依赖走阿里云镜像（`GRADLE_USER_HOME/init.d/mirrors.gradle`，官方源兜底）；SDK cmake 3.22.1 的 `ninja.exe` 已替换为上游 1.12.1（解决 Windows 260 字符路径限制导致的原生构建失败，原版备份 `ninja.exe.orig`）。
 
-M1（客户端工程与设计系统）已于 2026-10-27 实现完成：设计令牌与组件库（`mobile/src/ui/`）、四个 Tab 主入口与 choose/outfit/preview/add 任务页的原生导航映射（`mobile/src/app/`）、弹层（`src/features/sheets/`）、组件展示页（`/dev/components`，从"我的"页开发区进入）；演示数据为内存态、与真实资料隔离，M2 接入本地数据库后替换。支持系统版本确定为 Android 12（API 31）及以上（minSdkVersion=31），首发商店范围 M6 前定。Find X9 Pro 真机验证通过：导航与硬件返回栈、弹层关闭、字体缩放 1.3 与键盘不遮挡主操作（修复 hero 重叠与 edge-to-edge 键盘失效两个问题）、视觉经原型对照。**同日项目用户真机验收通过，M1 计完成；M2（本地衣橱与持久化）未开始。**后续同步计划状态、证据、相关功能文档及本文件；商品匹配后期实现，反馈分三批。
+M1（客户端工程与设计系统）已于 2026-10-27 实现完成：设计令牌与组件库（`mobile/src/ui/`）、四个 Tab 主入口与 choose/outfit/preview/add 任务页的原生导航映射（`mobile/src/app/`）、弹层（`src/features/sheets/`）、组件展示页（`/dev/components`，从"我的"页开发区进入）；演示数据为内存态、与真实资料隔离，M2 接入本地数据库后替换。支持系统版本确定为 Android 12（API 31）及以上（minSdkVersion=31），首发商店范围 M6 前定。Find X9 Pro 真机验证通过：导航与硬件返回栈、弹层关闭、字体缩放 1.3 与键盘不遮挡主操作（修复 hero 重叠与 edge-to-edge 键盘失效两个问题）、视觉经原型对照。**同日项目用户真机验收通过，M1 计完成。**
+
+实施顺序调整（2026-10-27，项目用户确认）：**A 线提前为当前主线**，优先衣物理解与上身预览两条工作流（项目用户定为必要能力；搭配推荐顺延，顺延原因与恢复条件记入 experiments 包 README）；M2 顺延，其三个前置决定已获确认——录入入口=实物拍照+相册多选建草稿（链接解析与多单品分离顺延至 AI 接入后）、删除=归档为主+彻底删除二次确认级联删文件、存储方向=expo-sqlite + SQLCipher 全库加密且密钥存设备安全存储（M2 实施验证后锁定）。A 线实验在 `packages/experiments/` 进行（实验纪律见该包 AGENTS.md）：脚本直连项目用户自有服务（GLM 图像理解 + DeepSeek 文本，均 OpenAI 兼容），凭证只存本机 `.env`、样本照片不入版本库；APP 内 AI 配置功能仍按计划 M5 落地，其"首批 URL 类型清单、地址拼接规则"等设计输入由本轮实验产出。上身预览的生成服务（GLM 系图像 vs 第三方试穿/图像编辑）选型调研在 `src/try-on-preview/PROVIDERS.md`，待项目用户选型。M2 期间的决定回写已落衣橱功能文档与开发计划 §5.2/§13。后续同步计划状态、证据、相关功能文档及本文件；商品匹配后期实现，反馈分三批。
 
 ## 9. 未决事项处理约定（2026-10-27）
 
