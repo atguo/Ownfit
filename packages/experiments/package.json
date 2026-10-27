@@ -1,12 +1,12 @@
 {
-  "name": "@outfit/experiments",
+  "name": "@ownfit/experiments",
   "version": "0.1.0",
   "description": "A 工作线 AI 可行性实验脚本（衣物理解/搭配推荐/上身预览），Node 环境",
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@outfit/contract": "workspace:*"
+    "@ownfit/contract": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

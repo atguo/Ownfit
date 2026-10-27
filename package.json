@@ -1,9 +1,9 @@
 {
-  "name": "today-outfit-workspace",
+  "name": "ownfit-workspace",
   "private": true,
   "packageManager": "pnpm@8.9.0",
   "scripts": {
-    "start": "pnpm --filter @outfit/mobile start",
+    "start": "pnpm --filter @ownfit/mobile start",
     "typecheck": "pnpm -r typecheck"
   },
   "workspaces": [

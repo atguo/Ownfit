@@ -10,7 +10,7 @@ importers:
 
   mobile:
     dependencies:
-      '@outfit/contract':
+      '@ownfit/contract':
         specifier: workspace:*
         version: link:../packages/contract
       expo:
@@ -59,7 +59,7 @@ importers:
 
   packages/experiments:
     dependencies:
-      '@outfit/contract':
+      '@ownfit/contract':
         specifier: workspace:*
         version: link:../contract
     devDependencies:
