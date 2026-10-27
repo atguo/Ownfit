@@ -58,6 +58,12 @@ export default function ProfileScreen() {
       />
       <SettingRow icon="grid" title="身材资料" value="按需补充" onPress={() => setSheet('body')} />
       <SettingRow icon="lock" title="照片与隐私" value="仅本地演示" onPress={() => setSheet('privacy')} />
+      <SettingRow
+        icon="spark"
+        title="模型配置"
+        value="AI 服务连接"
+        onPress={() => router.push('/ai/config')}
+      />
 
       {/* M1 开发入口：交付物“组件展示” */}
       <SettingRow
