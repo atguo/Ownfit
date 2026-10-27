@@ -1,0 +1,13 @@
+{
+  "name": "today-outfit-workspace",
+  "private": true,
+  "packageManager": "pnpm@8.9.0",
+  "scripts": {
+    "start": "pnpm --filter @outfit/mobile start",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "workspaces": [
+    "mobile",
+    "packages/*"
+  ]
+}
