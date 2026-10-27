@@ -1,0 +1,4 @@
+# 凭证与样本隐私（AGENTS.md 红线：Key 不入版本库；真人/衣物照片不入库）
+.env
+samples/*
+!samples/README.md
