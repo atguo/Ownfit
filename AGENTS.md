@@ -86,7 +86,7 @@ React Native 负责界面与业务交互；原生能力负责相机、相册、�
 - 目标中端 Android 与 iPhone 的具体机型、支持版本、体验阈值待首轮验证确定；没有测量就不声称已达性能目标。
 - 区分代码检查、模拟器验证、真机行为和真实试穿结果，交付时准确说明验证边界。
 
-RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `pnpm install` 安装依赖；`pnpm typecheck` 全量类型检查；`pnpm start` 启动 Expo 开发服务器。Android/iOS 真机构建与验证命令待 M1 按目标平台补充登记。已有浏览器原型可在项目根目录运行 `node prototype/server.cjs`，本机访问 `http://127.0.0.1:4173`。原型不是正式 APP，不能用其浏览器表现代替原生验收。后续命令以实际脚本为准登记，不编造尚不存在的入口。Windows 可承担日常开发，iOS 本地原生构建与调试需安排 macOS/Xcode 或相应构建环境，云构建不能替代真机验证。
+RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `pnpm install` 安装依赖；`pnpm typecheck` 全量类型检查；`pnpm start` 启动 Expo 开发服务器。首个验证平台为 Android（真机 OPPO Find X9 Pro，6.78 英寸 2772×1272、450ppi、1–120Hz）；导航采用 expo-router，路由在 `mobile/src/app/`。界面按窗口尺寸类别与安全区域适配不同屏幕，使用 dp 与弹性布局，不写死像素，保证系统字体缩放可用。仓库使用 Git，远程 `origin` 为 git@github.com:atguo/Ownfit.git。Development Build 需 Android Studio/JDK，本机尚未安装；构建与真机验收在 M1 落实，此前可用 Expo Go 预览无自定义原生模块的界面。已有浏览器原型可在项目根目录运行 `node prototype/server.cjs`，本机访问 `http://127.0.0.1:4173`。原型不是正式 APP，不能用其浏览器表现代替原生验收。后续命令以实际脚本为准登记，不编造尚不存在的入口。Windows 可承担日常开发，iOS 本地原生构建与调试需安排 macOS/Xcode 或相应构建环境，云构建不能替代真机验证。
 
 ## 6. 文档与项目同步：强制要求
 
@@ -135,7 +135,7 @@ RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `p
 
 保留已认可的原型视觉与主要流程；正式实现替换固定天气、硬编码组合和预制图，并保持演示与真实数据隔离。原型与功能规则不一致时记录差异并按已确认业务要求落地，不复制原型限制为产品规则。RN 客户端使用原生组件，不用 WebView 包装原型交付。
 
-工程框架已于 2026-10-27 初始化（pnpm workspace，Expo SDK 58；类型检查与 Metro 打包已验证通过）。M1–M6 阶段未开始，业务功能未实现，框架搭建不计入里程碑完成。后续同步计划状态、证据、相关功能文档及本文件；商品匹配后期实现，反馈分三批。
+工程框架已于 2026-10-27 初始化（pnpm workspace，Expo SDK 58；类型检查与 Metro 打包验证通过），同日确定 Android 优先（真机 OPPO Find X9 Pro）、导航采用 expo-router，Git 远程为 github.com/atguo/Ownfit。M1–M6 阶段未开始，业务功能未实现，框架搭建不计入里程碑完成。后续同步计划状态、证据、相关功能文档及本文件；商品匹配后期实现，反馈分三批。
 
 ## 9. 未决事项处理约定（2026-10-27）
 
