@@ -8,7 +8,7 @@
 
 核心价值是帮助用户选对穿搭。图片好看不能代替人物、衣服和上身效果的真实性；低录入负担也不能以伪造尺寸或面料信息为代价。
 
-当前处于工程框架已初始化、业务实现未开始的阶段。仓库已有项目计划、功能设计和可交互的浏览器 UI 原型；用户已认可按原型落地第一版，RN 工程框架已于 2026-10-27 初始化（pnpm workspace：`mobile/` Expo 客户端、`packages/contract/` 契约包、`packages/experiments/` 实验包），业务功能尚未实现。原型使用演示数据，不代表真实 AI、天气和持久化任务已实现。文档中的规划、开发默认和验收条件不代表模型效果已经验证。功能与架构变更后继续同步本节的目录、架构状态与可执行命令。
+当前处于第一版客户端实施阶段：M0（工程基线）与 M1（客户端工程与设计系统）已完成，M2（本地衣橱与持久化）未开始。仓库已有项目计划、功能设计和可交互的浏览器 UI 原型；用户已认可按原型落地第一版。RN 工程于 2026-10-27 初始化（pnpm workspace：`mobile/` Expo 客户端、`packages/contract/` 契约包、`packages/experiments/` 实验包），M1 已交付设计系统、四个主入口与任务内页面的原生界面及组件展示（`mobile/src/ui/`、`mobile/src/app/`），数据层仍为内存演示态，本地数据库、相机/相册与业务规则尚未实现。原型使用演示数据，不代表真实 AI、天气和持久化任务已实现。文档中的规划、开发默认和验收条件不代表模型效果已经验证。功能与架构变更后继续同步本节的目录、架构状态与可执行命令。
 
 ## 2. 文档职责与功能入口
 
@@ -86,7 +86,7 @@ React Native 负责界面与业务交互；原生能力负责相机、相册、�
 - 目标中端 Android 与 iPhone 的具体机型、支持版本、体验阈值待首轮验证确定；没有测量就不声称已达性能目标。
 - 区分代码检查、模拟器验证、真机行为和真实试穿结果，交付时准确说明验证边界。
 
-RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `pnpm install` 安装依赖；`pnpm typecheck` 全量类型检查；`pnpm start` 启动 Expo 开发服务器。首个验证平台为 Android（真机 OPPO Find X9 Pro，6.78 英寸 2772×1272、450ppi、1–120Hz）；导航采用 expo-router，路由在 `mobile/src/app/`。界面按窗口尺寸类别与安全区域适配不同屏幕，使用 dp 与弹性布局，不写死像素，保证系统字体缩放可用。仓库使用 Git，远程 `origin` 为 git@github.com:atguo/Ownfit.git。Development Build 需 Android Studio/JDK，本机尚未安装；构建与真机验收在 M1 落实，此前可用 Expo Go 预览无自定义原生模块的界面。已有浏览器原型可在项目根目录运行 `node prototype/server.cjs`，本机访问 `http://127.0.0.1:4173`。原型不是正式 APP，不能用其浏览器表现代替原生验收。后续命令以实际脚本为准登记，不编造尚不存在的入口。Windows 可承担日常开发，iOS 本地原生构建与调试需安排 macOS/Xcode 或相应构建环境，云构建不能替代真机验证。
+RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `pnpm install` 安装依赖；`pnpm typecheck` 全量类型检查；`pnpm start` 启动 Expo 开发服务器。首个验证平台为 Android（真机 OPPO Find X9 Pro，6.78 英寸 2772×1272、450ppi、1–120Hz）；导航采用 expo-router，路由在 `mobile/src/app/`。界面按窗口尺寸类别与安全区域适配不同屏幕，使用 dp 与弹性布局，不写死像素，保证系统字体缩放可用。仓库使用 Git，远程 `origin` 为 https://github.com/atguo/Ownfit.git。Android 调试工具链已于 2026-10-27 装于本机：Android Studio 2026.2（`D:\AndroidStudio`，其自带 JBR 25 兼作 Gradle 的 JAVA_HOME）、SDK（`D:\tools\AndroidSDK`，platform android-37、build-tools 36.0.0、platform-tools）；用户级环境变量已设 `ANDROID_HOME`、`JAVA_HOME`、`GRADLE_USER_HOME`（`D:\tools\gradle-home`）、`ANDROID_USER_HOME`，`platform-tools` 已入 PATH，Gradle 缓存等大文件均落在 D 盘。`mobile` 已加入 `expo-dev-client` 依赖，`mobile/android/` 为 prebuild 生成目录（git 忽略，可重建）。真机连接与 Development Build 真机验收仍在 M1 落实；无自定义原生模块前仍可用 Expo Go 预览界面。已有浏览器原型可在项目根目录运行 `node prototype/server.cjs`，本机访问 `http://127.0.0.1:4173`。原型不是正式 APP，不能用其浏览器表现代替原生验收。后续命令以实际脚本为准登记，不编造尚不存在的入口。Windows 可承担日常开发，iOS 本地原生构建与调试需安排 macOS/Xcode 或相应构建环境，云构建不能替代真机验证。
 
 ## 6. 文档与项目同步：强制要求
 
@@ -135,7 +135,9 @@ RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `p
 
 保留已认可的原型视觉与主要流程；正式实现替换固定天气、硬编码组合和预制图，并保持演示与真实数据隔离。原型与功能规则不一致时记录差异并按已确认业务要求落地，不复制原型限制为产品规则。RN 客户端使用原生组件，不用 WebView 包装原型交付。
 
-工程框架已于 2026-10-27 初始化（pnpm workspace，Expo SDK 58；类型检查与 Metro 打包验证通过），同日确定 Android 优先（真机 OPPO Find X9 Pro）、导航采用 expo-router，Git 远程为 github.com/atguo/Ownfit。M1–M6 阶段未开始，业务功能未实现，框架搭建不计入里程碑完成。后续同步计划状态、证据、相关功能文档及本文件；商品匹配后期实现，反馈分三批。
+工程框架已于 2026-10-27 初始化（pnpm workspace，Expo SDK 58；类型检查与 Metro 打包验证通过），同日确定 Android 优先（真机 OPPO Find X9 Pro）、导航采用 expo-router，Git 远程为 github.com/atguo/Ownfit。同日搭成 Android 调试环境并首次本机构建通过：`expo-dev-client` 接入，`expo prebuild` 生成 `mobile/android/`（git 忽略），`gradlew assembleDebug` 产出 debug APK；经无线 adb（手机与电脑同 Wi-Fi 网段，mDNS 自动发现）装入真机，完整链路验证通过；USB 数据线连接始终不通（疑似充电线/接口问题，未解决，当前以无线调试替代）。机器级构建要点：Gradle 发行版经华为镜像播种进 wrapper 缓存；Maven 依赖走阿里云镜像（`GRADLE_USER_HOME/init.d/mirrors.gradle`，官方源兜底）；SDK cmake 3.22.1 的 `ninja.exe` 已替换为上游 1.12.1（解决 Windows 260 字符路径限制导致的原生构建失败，原版备份 `ninja.exe.orig`）。
+
+M1（客户端工程与设计系统）已于 2026-10-27 实现完成：设计令牌与组件库（`mobile/src/ui/`）、四个 Tab 主入口与 choose/outfit/preview/add 任务页的原生导航映射（`mobile/src/app/`）、弹层（`src/features/sheets/`）、组件展示页（`/dev/components`，从"我的"页开发区进入）；演示数据为内存态、与真实资料隔离，M2 接入本地数据库后替换。支持系统版本确定为 Android 12（API 31）及以上（minSdkVersion=31），首发商店范围 M6 前定。Find X9 Pro 真机验证通过：导航与硬件返回栈、弹层关闭、字体缩放 1.3 与键盘不遮挡主操作（修复 hero 重叠与 edge-to-edge 键盘失效两个问题）、视觉经原型对照。**同日项目用户真机验收通过，M1 计完成；M2（本地衣橱与持久化）未开始。**后续同步计划状态、证据、相关功能文档及本文件；商品匹配后期实现，反馈分三批。
 
 ## 9. 未决事项处理约定（2026-10-27）
 
