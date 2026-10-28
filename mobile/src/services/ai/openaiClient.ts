@@ -48,7 +48,9 @@ export async function chatCompletion(
     const raw = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
     const part = raw.choices?.[0]?.message?.content;
     const content = typeof part === 'string' ? part : '';
-    return { ok: content.trim().length > 0, content, latencyMs, error: content ? undefined : { kind: 'empty', message: '返回为空' } };
+    // HTTP 200 即视为连接可用：推理型模型可能把小 token 预算全部用于思考而返回空内容，
+    // 空回复不代表鉴权或地址有问题（真实案例：glm-5.3-flash + max_tokens 16）。
+    return { ok: true, content, latencyMs };
   } catch (error) {
     const latencyMs = Date.now() - started;
     const aborted = error instanceof Error && error.name === 'AbortError';
