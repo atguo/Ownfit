@@ -12,6 +12,7 @@ import {
   deleteConfig,
   getConfig,
   updateConfig,
+  updateTestResult,
 } from '../../services/ai/configStore';
 import { testConnection } from '../../services/ai/testConnection';
 import {
@@ -138,6 +139,13 @@ export default function AiConfigEditScreen() {
     }
     setTest({ phase: 'running' });
     const result = await testConnection(buildDraft(), apiKey.trim() || undefined);
+    // 已保存的配置把测试结果写回存储（列表页的状态徽标展示用）；未保存的草稿仅展示
+    if (existing) {
+      await updateTestResult(existing.id, {
+        testStatus: result.ok ? 'passed' : 'failed',
+        testMessage: result.message,
+      });
+    }
     setTest({ phase: 'done', ok: result.ok, message: result.message });
   }
 

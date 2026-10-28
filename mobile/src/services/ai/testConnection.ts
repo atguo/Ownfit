@@ -23,7 +23,12 @@ export async function testConnection(config: ModelConfig, draftApiKey?: string):
       { role: 'user', content: 'hi' },
     ]);
     if (result.ok) {
-      return { ok: true, message: `连接成功（${result.latencyMs}ms）` };
+      return {
+        ok: true,
+        message: result.content.trim()
+          ? `连接成功（${result.latencyMs}ms）`
+          : `连接成功（${result.latencyMs}ms）。模型未返回可见文本——推理型模型常见，不影响连接判断`,
+      };
     }
     return {
       ok: false,
