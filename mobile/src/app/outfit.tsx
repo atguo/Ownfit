@@ -94,8 +94,12 @@ export default function OutfitScreen() {
         toast('这套已经收藏，可以在“搭配”里找到');
         return;
       }
-      await saveContractPlan(plan, null);
-      toast('已收藏到“我的搭配”，尚未标记穿过');
+      try {
+        await saveContractPlan(plan, null);
+        toast('已收藏到“我的搭配”，尚未标记穿过');
+      } catch (error) {
+        toast(error instanceof Error ? error.message : '保存失败，请重试');
+      }
     })();
   }
 

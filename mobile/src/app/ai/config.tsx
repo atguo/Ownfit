@@ -5,8 +5,13 @@ import { Page } from '../../ui/Screen';
 import { BackTitle } from '../../ui/PageTop';
 import { Button } from '../../ui/components/Button';
 import { Notice } from '../../ui/components/Basics';
+import { useToast } from '../../ui/components/Toast';
 import { loadConfigs } from '../../services/ai/configStore';
 import { capabilityLabels, urlKindLabels, type ModelConfig } from '../../services/ai/types';
+import {
+  getRememberedVisionConfigId,
+  rememberDefaultVisionConfig,
+} from '../../features/garmentAnalysisStore';
 import { colors, radius } from '../../ui/tokens';
 
 const testStatusLabels: Record<ModelConfig['testStatus'], { text: string; color: string }> = {
@@ -16,17 +21,27 @@ const testStatusLabels: Record<ModelConfig['testStatus'], { text: string; color:
 };
 
 // AI 模型配置列表（AI模型配置与接入.md：四项手动配置 + 模型 ID；密钥只存设备安全存储）。
+// 具备“视觉理解”能力的配置可设为衣物分析的默认模型（D1：选择结果记在本地，不静默切换）。
 export default function AiConfigListScreen() {
   const router = useRouter();
+  const toast = useToast();
   const [configs, setConfigs] = useState<ModelConfig[]>([]);
+  const [defaultConfigId, setDefaultConfigId] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       setConfigs(loadConfigs());
+      void getRememberedVisionConfigId().then(setDefaultConfigId);
       setLoaded(true);
     }, []),
   );
+
+  async function setAsAnalysisDefault(configId: string) {
+    await rememberDefaultVisionConfig(configId);
+    setDefaultConfigId(configId);
+    toast('已设为衣物分析的默认模型');
+  }
 
   return (
     <Page>
@@ -57,6 +72,18 @@ export default function AiConfigListScreen() {
                 ))}
                 <Text style={[styles.statusText, { color: status.color }]}>● {status.text}</Text>
               </View>
+              {config.capabilities.includes('vision') ? (
+                config.id === defaultConfigId ? (
+                  <Text style={styles.defaultNote}>衣物分析默认模型</Text>
+                ) : (
+                  <Button
+                    variant="chip"
+                    label="设为衣物分析默认"
+                    onPress={() => void setAsAnalysisDefault(config.id)}
+                    style={styles.defaultAction}
+                  />
+                )
+              ) : null}
             </View>
             <Text style={styles.chevron}>›</Text>
           </Pressable>
@@ -64,7 +91,9 @@ export default function AiConfigListScreen() {
       })}
 
       {loaded && configs.length === 0 ? (
-        <Notice>还没有配置 AI 服务。添加后即可在后续版本中调用解析与预览能力。</Notice>
+        <Notice>
+          还没有配置 AI 服务。添加一条带“视觉理解”能力的配置后，录入衣物时就可以按照片给出分析建议。
+        </Notice>
       ) : null}
 
       <Button
@@ -127,6 +156,16 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 10,
     lineHeight: 14,
+  },
+  defaultNote: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: colors.tagText,
+    marginTop: 8,
+  },
+  defaultAction: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
   },
   chevron: {
     color: colors.muted,

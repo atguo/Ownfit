@@ -82,7 +82,7 @@ export default function ProfileScreen() {
       />
 
       <Text style={styles.subtleInfo}>
-        {'本演示版不上传照片，不接入账号或模型服务。\n演示内容只保存在本次运行中。'}
+        {'照片与资料保存在本机；只有做衣物分析时，才会把这一件的照片发送到你手动配置的模型服务。\n不接入账号，也不建设云端资料库。'}
       </Text>
 
       <PreferencesSheet visible={sheet === 'prefs'} onClose={() => setSheet(null)} />

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Page } from '../../ui/Screen';
 import { PageTop } from '../../ui/PageTop';
@@ -44,7 +44,10 @@ export default function OutfitsScreen() {
     const slots: Partial<Record<'top' | 'dress' | 'bottom' | 'shoes', string>> = {};
     for (const item of plan.items) {
       const wardrobeItem = await getItem(item.itemId);
-      if (!wardrobeItem?.category) continue;
+      if (!wardrobeItem || wardrobeItem.status !== 'active' || !wardrobeItem.category) {
+        Alert.alert('这套搭配含不可用衣物', '部分衣物已删除或归档，历史记录仍保留。请从衣橱重新选择可用衣物搭配。');
+        return;
+      }
       const slot = slotForCategory(wardrobeItem.category);
       if (slot && !slots[slot]) slots[slot] = item.itemId;
     }
@@ -134,15 +137,28 @@ export default function OutfitsScreen() {
 
 function PlanThumb({ itemId }: { itemId: string }) {
   const [uri, setUri] = useState<string | null>(null);
+  const [deleted, setDeleted] = useState(false);
   useFocusEffect(
     useCallback(() => {
-      getMainPhotoPaths(itemId).then((paths) => setUri(paths ? photoUri(paths.thumbPath) : null));
+      let active = true;
+      void (async () => {
+        const item = await getItem(itemId);
+        const isDeleted = !item || item.status === 'deleted';
+        const paths = isDeleted ? null : await getMainPhotoPaths(itemId);
+        if (active) {
+          setDeleted(isDeleted);
+          setUri(paths ? photoUri(paths.thumbPath) : null);
+        }
+      })();
+      return () => { active = false; };
     }, [itemId]),
   );
   return uri ? (
     <Image source={{ uri }} style={styles.thumb} resizeMode="cover" />
   ) : (
-    <View style={[styles.thumb, styles.thumbPlaceholder]} />
+    <View style={[styles.thumb, styles.thumbPlaceholder, { alignItems: 'center', justifyContent: 'center' }]}>
+      {deleted ? <Text style={{ color: colors.muted }}>已删除</Text> : null}
+    </View>
   );
 }
 

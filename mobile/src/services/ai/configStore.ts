@@ -5,7 +5,7 @@
 
 import * as SecureStore from 'expo-secure-store';
 import { File, Paths } from 'expo-file-system';
-import type { ModelConfig } from './types';
+import { LEGACY_CALL_REVISION, type ModelConfig } from './types';
 
 const CONFIG_FILE = 'ai-model-configs.json';
 
@@ -23,6 +23,27 @@ export function loadConfigs(): ModelConfig[] {
   } catch {
     // 文件损坏时不抛出、不静默清空：保留原文件并返回空列表，提示用户
     return [];
+  }
+}
+
+/** 结构化读取结果：区分“没有配置”和“配置损坏”，避免把损坏当成未配置 */
+export type ConfigsReadResult =
+  | { ok: true; configs: ModelConfig[] }
+  | { ok: false; reason: 'unreadable' };
+
+/**
+ * 分析等任务使用的结构化读取：文件不存在 = 空列表（合法）；文件存在但无法解析 = unreadable。
+ * 不改变 loadConfigs 的既有行为（其调用方仍把它当空列表处理）。
+ */
+export function loadConfigsStructured(): ConfigsReadResult {
+  const file = configFile();
+  if (!file.exists) return { ok: true, configs: [] };
+  try {
+    const parsed: unknown = JSON.parse(file.textSync());
+    if (!Array.isArray(parsed)) return { ok: false, reason: 'unreadable' };
+    return { ok: true, configs: parsed as ModelConfig[] };
+  } catch {
+    return { ok: false, reason: 'unreadable' };
   }
 }
 
@@ -48,6 +69,13 @@ function newId(): string {
   return `cfg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * 生成新的调用版本标识（D2）。随机值，不由 Key 派生，避免任何形式的密钥哈希泄漏。
+ */
+function newCallRevision(): string {
+  return `rev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 async function storeKey(keyRef: string, apiKey: string): Promise<void> {
   await SecureStore.setItemAsync(keyRef, apiKey, {
     keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
@@ -70,6 +98,7 @@ export async function addConfig(input: ConfigInput): Promise<ModelConfig> {
     keyRef,
     hasKey: !!input.apiKey,
     testStatus: 'untested',
+    callRevision: newCallRevision(),
     createdAt: now,
     updatedAt: now,
   };
@@ -77,14 +106,22 @@ export async function addConfig(input: ConfigInput): Promise<ModelConfig> {
   return config;
 }
 
-/** 更新配置：Key 为空时沿用原 Key；URL 类型/地址等变更后测试状态重置为未测试 */
+/**
+ * 更新配置：Key 为空时沿用原 Key；URL 类型/地址等变更后测试状态重置为未测试。
+ * callRevision 仅在影响调用结果的字段变化时更新（名称、测试结果不算，见 D2）。
+ */
 export async function updateConfig(id: string, input: ConfigInput): Promise<ModelConfig | undefined> {
   const configs = loadConfigs();
   const index = configs.findIndex((c) => c.id === id);
   if (index < 0) return undefined;
   const previous = configs[index];
   if (input.apiKey) await storeKey(previous.keyRef, input.apiKey);
-  const capabilitiesChanged = JSON.stringify(previous.capabilities) !== JSON.stringify(input.capabilities);
+  const callChanged =
+    previous.urlKind !== input.urlKind ||
+    previous.baseUrl !== input.baseUrl ||
+    previous.modelId !== input.modelId ||
+    JSON.stringify(previous.capabilities) !== JSON.stringify(input.capabilities) ||
+    !!input.apiKey;
   const config: ModelConfig = {
     ...previous,
     name: input.name,
@@ -96,9 +133,9 @@ export async function updateConfig(id: string, input: ConfigInput): Promise<Mode
     testStatus: 'untested',
     testMessage: undefined,
     testedAt: undefined,
+    callRevision: callChanged ? newCallRevision() : previous.callRevision ?? LEGACY_CALL_REVISION,
     updatedAt: new Date().toISOString(),
   };
-  void capabilitiesChanged;
   configs[index] = config;
   saveConfigs(configs);
   return config;

@@ -103,6 +103,8 @@ RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `p
 
 同步范围包括功能新增或移除、职责与流程调整、阶段范围变化、数据或状态契约、模块与目录结构、技术选型及关键依赖、原生与任务执行边界、构建测试入口和实现状态变化。
 
+**每次完成工作后，必须在同一次交付中同步更新相关文档的进度，不得只在聊天中汇报，也不得等整个里程碑结束后补记。** 优先更新对应的 `docs/plans/` 执行计划或任务清单，记录本次完成内容、实际验证结果、未验证部分及剩余事项；涉及里程碑状态或重要修复时，同时更新 [里程碑实施记录](docs/里程碑实施记录.md)，必要时同步 [开发计划](docs/开发计划.md)。没有专门执行计划时，在里程碑实施记录中简要登记。严格区分“已实现”“已验证”“待验收”和“受阻”，不能将代码完成或自动化测试通过等同于真机验收或模型效果达标。
+
 执行顺序：
 
 1. 修改前阅读本文件与受影响功能文档，检查当前代码及工作区状态；仅在存在 Git 仓库时使用 Git 状态检查。
@@ -117,15 +119,19 @@ RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `p
 
 ## 7. 当前目录与协作要求
 
+- `docs/`：项目文档的唯一存放位置；所有正式文档（计划、设计、规格、说明）统一从这里管理。
 - `AGENTS.md`：本项目协作与技术入口。
 - `docs/项目计划书.md`：项目概述。
 - `docs/functions/`：功能设计与索引。
 - `docs/开发计划.md`：按已认可原型实施第一版的阶段计划。
+- `docs/plans/`：实施计划、分批执行手册等过程文档。
 - `docs/prototype/`：原型基准说明与截图。
 - `prototype/`：本地浏览器交互原型及示例素材，不是 RN 客户端。
 - `mobile/`：RN + Expo 客户端（workspace 包 `@ownfit/mobile`）。
 - `packages/`：`contract/` 业务契约与共享校验；`experiments/` A 线实验脚本。
 - `work/`（如存在）：临时工作文件或历史备份，不是正式设计来源，不从中覆盖当前文档。
+
+文档目录规则（强制）：项目内所有文档统一由 `docs/` 管理，**不得为某个 AGENTS、编码代理或工具建立专用文档目录**（例如 `.trae/documents/`、`.zcode/plans/`）。不同来源生成的任务计划、设计、规格与说明文档一律放入 `docs/`，可按主题建子目录（如 `docs/plans/`）；临时脚本、草稿与调试输出不进入版本库，也不放入 `docs/`。新增文档目录后同步更新本节。
 
 不要创建未经请求的应用脚手架、安装依赖或扩展功能范围。对现有工作采用最小必要修改，不清理无关文件；新增工程目录后更新本节，不能将规划目录冒充已存在结构。
 
@@ -183,3 +189,30 @@ M2（本地衣橱与持久化）已于 2026-10-29 实现完成：SQLCipher 加�
 - 纯文档修改检查差异、相对链接及与代码的一致性，无需为此执行原生构建。
 - 交付前运行 `git diff --check` 与 `git status --short`，确认只修改授权范围；不自动提交或推送。
 - 类型检查通过、原型交互通过、真机验收、AI 效果验证分别报告，不能互相替代。既有验收记录不等于本次重新验证。
+
+### M3 基础单品替换修复（2026-10-29）
+
+基础单品解锁后被替换时，当前 basisId 随槽位一起切换到新单品；撤销快照同时保存并恢复 basisId，保存不再附加已替换的旧单品。回归命令：`node --test mobile/tests/outfitSession.test.cjs`。本次修复不迁移或自动清理历史已保存方案，真机复验仍待进行。
+
+### 衣物删除联动（2026-10-29）
+
+删除衣物保留最小 deleted 标记供历史方案关联，清除名称、品类、属性和照片；收藏与穿着记录不级联删除。历史缩略位显示“已删除”，复用前检查当前可用性，保存拒绝不可用衣物；归档恢复不能复活已删除记录。文件清理失败保留路径供重试并提示，尚未实现 M4 的重启自动清理。回归：`node --test mobile/tests/*.test.cjs`。
+
+### 衣物 AI 分析接入（2026-10-29，实现完成，待真机验收）
+
+按 [衣物 AI 分析分批执行手册](docs/plans/2026-10-29-衣物AI分析-分批执行手册.md)（用户已批准）提前落地衣物分析链路：新照片保存后自动分析、旧衣物手动/批量补分析。**代码与自动回归已完成（P1–P7），但真实模型调用 0 次、未真机验收**，不表示该功能可用，也不表示 M4/M5 已完成。
+
+- 契约包新增 `packages/contract/src/garmentAnalysis.ts`：`GARMENT_ANALYSIS_VERSION = '1.0.0-draft'`，`Field` 三态（known/unknown/not_applicable）、严格对象拒绝未知键、非 single 时属性必须 unknown；与搭配契约并存，不改搭配字段。校验按 `pnpm --filter @ownfit/contract test`。
+- 本地库 schema 升至 v3（`mobile/src/data/db.ts`）：`items.revision`、`attributes.value_state|value_format|analysis_task_id`、`tasks`（仅 kind=`garment_analysis`）、`ai_task_preferences`。迁移与 `user_version` 同事务，失败回滚不清库；迁移步骤导出为 `schemaMigrations`/`runMigrations` 便于内存回归。
+- 事务方式（用户 2026-10-29 确认）：**不使用 `withExclusiveTransactionAsync`**——它经 `Transaction.createAsync` 新建原生连接且不继承 SQLCipher 密钥；统一使用同一连接事务。
+- 新增仓库：`analysisTypes.ts`（跨批类型）、`taskRepository.ts`（创建幂等/同衣物去重、条件状态更新、默认视觉模型）、`attributeRepository.ts`（人工优先取值、`getAnalysisView`、`commitGarmentAnalysis` 原子提交与版本/删除保护）；`photoRepository` 增加按 `main_photo_id` 解析分析输入照片与读取分析图（data URL）。
+- 模型接入（P4，全部假网络，未真实调用）：`types.ts` 为配置增加 `callRevision`（URL 类型/地址/模型 ID/能力标签/密钥变化时更新，名称与连接测试不更新）；`configStore` 增加 `loadConfigsStructured`（区分"无配置"与"配置损坏"）；新增 `services/ai/visionConfig.ts`（`resolveVisionConfig` 返回 ready/choose/missing/invalid，默认失效时不静默切换供应商）与 `services/ai/garmentAnalysis.ts`（提示词、单张图片请求、严格 JSON 解析、"鞋"→"鞋履"适配、契约校验；分析参数 2048/90000）；`openaiClient` 追加 `options.maxTokens/signal` 并区分 timeout/cancelled，连接测试仍是 16/30000。
+- 任务执行（P5）：`services/ai/garmentTaskRunner.ts`（依赖注入的串行执行器：领取 queued → 发送前写 running → 输入/配置版本校验 → 调用模型 → 原子提交；启动恢复把遗留 running 标 interrupted 且不重发；前后台门控；归档/删除时尽力中止；本地提交失败只重试提交而不重新调用模型）与 `features/garmentAnalysisStore.ts`（订阅通知、会话批次与 requestKey 辅助）。
+- 页面接入（P6）：`_layout.tsx` 挂载单例执行器（启动恢复 + AppState 前后台 + 初始化失败提示）；`add.tsx` 保存成功后自动按批入队、无模型/失效时一次提示并可去配置、多候选弹层选择并记住默认、返回后续接本批、AI 建议预填但不覆盖用户输入；`ai/config.tsx` 可设衣物分析默认模型；`features/sheets/VisionModelSheet.tsx`（新增）。旧隐私文案（“不上传照片/不接入模型服务”“不会自动识别品类”）已改为准确表述。
+- 历史衣物与详情（P7）：`(tabs)/wardrobe.tsx` 增“分析未分析衣物（N 件）”批量入口（只含草稿/已入库、有主图、从未建过任务）与卡片分析状态；`features/sheets/WardrobeItemSheet.tsx` 增分析状态、逐字段修正（枚举用 Chip、颜色逐项编辑、标签分隔输入并校验数量、未知/不适用用明确选项）、明确确认入口（每个未确认字段旁的“确认”按钮 + 顶部“确认全部分析结果（N 项）”，一键写入人工确认、只落本机不重跑模型）、`AI 分析/重新分析`、失败/中断的重试（提示可能再次计费）与“重试保存结果”（只提交内存结果，不重复调用模型）；`attributeRepository.recordUserAttribute` 在同一事务内递增 `items.revision`，使在途结果判为 stale 而不覆盖人工修改。
+- **整体验证状态**：类型检查、契约样例与 54 项自动回归通过（全部使用假客户端，**真实模型调用 0 次**）；**未做真机验收**（P8 待执行），模型识别质量未经真实样本核对，不得宣称识别准确；本工作不表示 M4、M5 已完成。
+- 回归：`node --test mobile/tests/*.test.cjs`（含迁移回滚、任务幂等与竞态、人工优先、stale、删除晚返回、收藏保留、视觉路由与 callRevision、分析解析与错误分类、执行器串行与恢复、单例与默认模型、人工写入递增版本）。
+
+### 衣物分析结果确认入口修复（2026-10-29）
+
+真机试用发现：详情页 AI 结果只显示“来自照片分析（未确认）”，确认只能靠点击已高亮的状态 Chip 才隐式进入保存，用户无法发现入口。修复：在 `mobile/src/features/sheets/WardrobeItemSheet.tsx` 为每个未确认字段增加“确认”按钮，并在分析区顶部增加“确认全部分析结果（N 项）”；确认即调用 `recordUserAttribute` 写入 `user_confirmed`（只落本机、不重新调用模型），并递增 `items.revision`。属 P7 缺口修复，不新增数据契约。回归：`pnpm typecheck` 与 `node --test mobile/tests/*.test.cjs`（54 项）通过；真机复验待进行。
