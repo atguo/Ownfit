@@ -40,6 +40,7 @@ export const slotLabels: Record<OutfitSlot, string> = {
 };
 
 export interface OutfitSnapshot {
+  basisId: string | null;
   slots: Partial<Record<OutfitSlot, string>>;
   locks: string[];
   wear: WearStyle;
@@ -95,6 +96,7 @@ export function getOutfitSession(): OutfitSessionState {
 }
 
 const snapshot = (): OutfitSnapshot => ({
+  basisId: state.basisId,
   slots: { ...state.slots },
   locks: [...state.locks],
   wear: state.wear,
@@ -113,7 +115,7 @@ export function outfitHistoryLength(): number {
 export function outfitUndo(): boolean {
   const prev = state.history.pop();
   if (!prev) return false;
-  set({ slots: prev.slots, locks: prev.locks, wear: prev.wear });
+  set({ basisId: prev.basisId, slots: prev.slots, locks: prev.locks, wear: prev.wear });
   return true;
 }
 
@@ -133,7 +135,11 @@ export function isLocked(itemId: string): boolean {
 export function replaceSlot(slot: OutfitSlot, newItemId: string): 'ok' | 'locked' {
   const current = state.slots[slot];
   if (current && state.locks.includes(current)) return 'locked';
-  withHistory({ slots: { ...state.slots, [slot]: newItemId } });
+  withHistory({
+    slots: { ...state.slots, [slot]: newItemId },
+    // 基础单品解锁后被替换，新单品承接其角色，避免保存时追加旧单品。
+    basisId: current === state.basisId ? newItemId : state.basisId,
+  });
   return 'ok';
 }
 
@@ -167,7 +173,7 @@ export function slotGapMessage(slot: OutfitSlot): string {
  */
 export async function startOutfitFrom(basisId: string): Promise<boolean> {
   const basis = await getItem(basisId);
-  if (!basis?.category) return false; // 草稿未确认品类时不能作为搭配起点
+  if (!basis?.category || basis.status !== 'active') return false; // 草稿未确认品类时不能作为搭配起点
   const basisSlot = slotForCategory(basis.category);
   if (!basisSlot) return false;
 

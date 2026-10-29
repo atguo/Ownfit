@@ -38,8 +38,38 @@ export interface ModelConfig {
   /** 测试失败时的摘要（不含 Key） */
   testMessage?: string;
   testedAt?: string;
+  /**
+   * 调用配置版本（D2，2026-10-29）：URL 类型/基础地址/模型 ID/能力标签/API Key 变化时更新；
+   * 名称与连接测试结果变化不更新。旧配置缺省为 'legacy'，用于发送前判断配置是否被改过。
+   */
+  callRevision?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 旧配置（无 callRevision）的缺省版本标识 */
+export const LEGACY_CALL_REVISION = 'legacy';
+
+/** 读取配置的调用版本；缺失时按 legacy 处理 */
+export function callRevisionOf(config: Pick<ModelConfig, 'callRevision'>): string {
+  return config.callRevision ?? LEGACY_CALL_REVISION;
+}
+
+/** 基础地址是否可用于实际调用（必须是非空 http/https 地址） */
+export function isValidBaseUrl(baseUrl: string): boolean {
+  const trimmed = baseUrl.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return false;
+  return /^https?:\/\/[^\s/]+/i.test(trimmed);
+}
+
+/** 是否可作为衣物分析的视觉候选（不含密钥可用性检查） */
+export function isVisionCandidate(config: ModelConfig): boolean {
+  return (
+    config.urlKind === 'openai' &&
+    config.capabilities.includes('vision') &&
+    config.modelId.trim().length > 0 &&
+    isValidBaseUrl(config.baseUrl)
+  );
 }
 
 /** 拼接规则由 urlKind 决定（2026-10-27 确认的首批清单） */

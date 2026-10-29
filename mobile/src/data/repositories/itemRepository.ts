@@ -12,9 +12,10 @@ import {
   insertPhotoRecord,
   ORIGINAL_MAX_DIMENSION,
 } from './photoRepository';
+import { cancelActiveTasks, deleteTasksForItem } from './taskRepository';
 import { categories, type ItemCategory } from '../demo';
 
-export type ItemStatus = 'draft' | 'active' | 'archived';
+export type ItemStatus = 'draft' | 'active' | 'archived' | 'deleted';
 
 export interface WardrobeItem {
   id: string;
@@ -23,6 +24,8 @@ export interface WardrobeItem {
   name: string | null;
   sourceType: string;
   mainPhotoId: string | null;
+  /** 资料版本：用户修改、确认入库、归档/恢复、删除与更换照片时递增（AI 结果不递增） */
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,6 +42,7 @@ function rowToItem(row: Record<string, unknown>): WardrobeItem {
     name: (row.name as string) ?? null,
     sourceType: String(row.source_type ?? 'photo'),
     mainPhotoId: (row.main_photo_id as string) ?? null,
+    revision: Number(row.revision ?? 1),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -94,36 +98,50 @@ export async function createDraftFromPhoto(
   return rowToItem(row ?? {});
 }
 
-/** 确认品类（+可选名称）：草稿 → 已入库，同时写入用户确认的品类属性 */
+/**
+ * 确认品类（+可选名称）：草稿 → 已入库，同时写入用户确认的品类属性。
+ * 幂等：已是已入库且品类与名称都未变时不重复写属性、不递增 revision。
+ */
 export async function confirmItem(
   id: string,
   input: { category: ItemCategory; name?: string },
 ): Promise<void> {
   const db = await getDb();
   const now = new Date().toISOString();
-  await db.runAsync(
-    'UPDATE items SET status = ?, category = ?, name = ?, updated_at = ? WHERE id = ?',
-    'active',
-    input.category,
-    input.name?.trim() || null,
-    now,
-    id,
-  );
-  await db.runAsync(
-    `INSERT INTO attributes (id, item_id, field, value, source_type, source_ref, confirm_status, recorded_at, item_version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    `attr-${id}-category`,
-    id,
-    'category',
-    input.category,
-    'user_confirmed',
-    '录入时手动确认',
-    'confirmed',
-    now,
-  );
+  const current = await getItem(id);
+  if (!current || current.status === 'deleted') throw new Error('这件衣物已删除');
+  const name = input.name?.trim() || null;
+  if (current.status === 'active' && current.category === input.category && current.name === name) {
+    return; // 幂等：重复确认不产生重复属性，也不推进版本
+  }
+  const revision = current.revision + 1;
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      'UPDATE items SET status = ?, category = ?, name = ?, revision = ?, updated_at = ? WHERE id = ?',
+      'active',
+      input.category,
+      name,
+      revision,
+      now,
+      id,
+    );
+    await db.runAsync(
+      `INSERT INTO attributes (id, item_id, field, value, unit, source_type, source_ref, confirm_status, recorded_at, item_version)
+       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
+      `attr-${id}-category-${Date.now().toString(36)}`,
+      id,
+      'category',
+      input.category,
+      'user_confirmed',
+      '录入时手动确认',
+      'confirmed',
+      now,
+      revision,
+    );
+  });
 }
 
-/** 编辑名称与品类（已入库件） */
+/** 编辑名称与品类（已入库件）；实际发生变化才递增 revision */
 export async function updateItemBasics(
   id: string,
   input: { name?: string | null; category?: ItemCategory },
@@ -131,30 +149,38 @@ export async function updateItemBasics(
   const db = await getDb();
   const now = new Date().toISOString();
   const item = await getItem(id);
-  if (!item) return;
+  if (!item || item.status === 'deleted') return;
   const name = input.name !== undefined ? input.name?.trim() || null : item.name;
   const category = input.category ?? item.category;
-  await db.runAsync(
-    'UPDATE items SET name = ?, category = ?, updated_at = ? WHERE id = ?',
-    name,
-    category,
-    now,
-    id,
-  );
-  if (input.category && input.category !== item.category) {
+  const categoryChanged = input.category !== undefined && input.category !== item.category;
+  if (name === item.name && !categoryChanged) return;
+
+  const revision = item.revision + 1;
+  await db.withTransactionAsync(async () => {
     await db.runAsync(
-      `INSERT INTO attributes (id, item_id, field, value, source_type, source_ref, confirm_status, recorded_at, item_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      `attr-${id}-category-${Date.now().toString(36)}`,
-      id,
-      'category',
-      input.category,
-      'user_confirmed',
-      '详情页手动修改',
-      'confirmed',
+      'UPDATE items SET name = ?, category = ?, revision = ?, updated_at = ? WHERE id = ?',
+      name,
+      category,
+      revision,
       now,
+      id,
     );
-  }
+    if (categoryChanged && input.category !== undefined) {
+      await db.runAsync(
+        `INSERT INTO attributes (id, item_id, field, value, unit, source_type, source_ref, confirm_status, recorded_at, item_version)
+         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
+        `attr-${id}-category-${Date.now().toString(36)}`,
+        id,
+        'category',
+        input.category,
+        'user_confirmed',
+        '详情页手动修改',
+        'confirmed',
+        now,
+        revision,
+      );
+    }
+  });
 }
 
 export async function getItem(id: string): Promise<WardrobeItem | undefined> {
@@ -176,33 +202,67 @@ export async function listItemIdsByStatus(status: ItemStatus): Promise<string[]>
 export async function getMainThumb(itemId: string): Promise<string | null> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ thumb_path: string }>(
-    "SELECT thumb_path FROM photos WHERE item_id = ? AND kind = 'main' LIMIT 1",
+    "SELECT thumb_path FROM photos WHERE item_id = ? AND kind = 'main' AND EXISTS (SELECT 1 FROM items WHERE items.id = photos.item_id AND items.status != 'deleted') LIMIT 1",
     itemId,
   );
   return row?.thumb_path ?? null;
 }
 
+/**
+ * 归档：状态改为 archived 并递增 revision；同时取消该衣物 queued/running 的分析任务
+ * （分批执行手册 R5），已保存的成功结果保留。
+ */
 export async function archiveItem(id: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync("UPDATE items SET status = 'archived', updated_at = ? WHERE id = ?", new Date().toISOString(), id);
+  const item = await getItem(id);
+  if (!item || item.status === 'deleted') return;
+  const now = new Date().toISOString();
+  await db.withTransactionAsync(async () => {
+    if (item.status !== 'archived') {
+      await db.runAsync(
+        "UPDATE items SET status = 'archived', revision = revision + 1, updated_at = ? WHERE id = ? AND status != 'deleted'",
+        now,
+        id,
+      );
+    }
+    await cancelActiveTasks(id);
+  });
 }
 
+/** 恢复到衣橱（仅 archived 生效，且不复活已删除记录）；不自动重新分析 */
 export async function restoreItem(id: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync("UPDATE items SET status = 'active', updated_at = ? WHERE id = ?", new Date().toISOString(), id);
+  const item = await getItem(id);
+  if (!item || item.status === 'deleted' || item.status === 'active') return;
+  await db.runAsync(
+    "UPDATE items SET status = 'active', revision = revision + 1, updated_at = ? WHERE id = ? AND status != 'deleted'",
+    new Date().toISOString(),
+    id,
+  );
 }
 
-/** 彻底删除：级联删除照片记录与文件。调用方必须先做二次确认。 */
+/**
+ * 删除资料及照片，保留最小已删除标记供历史方案引用；重复调用可重试文件清理。
+ * 资料事务内同时清理该衣物的分析属性与任务（分批执行手册 R5），收藏与穿着记录不动。
+ */
 export async function purgeItem(id: string): Promise<void> {
   const db = await getDb();
   const photos = await db.getAllAsync<{ original_path: string; thumb_path: string }>(
     'SELECT original_path, thumb_path FROM photos WHERE item_id = ?',
     id,
   );
+  // 先使资料不可用；文件清理中断时保留路径记录，后续重试仍可清理。
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      "UPDATE items SET status = 'deleted', name = NULL, category = NULL, main_photo_id = NULL, revision = revision + 1, updated_at = ? WHERE id = ?",
+      new Date().toISOString(), id,
+    );
+    await db.runAsync('DELETE FROM attributes WHERE item_id = ?', id);
+    await deleteTasksForItem(id);
+  });
   for (const photo of photos) deletePhotoFiles(photo.original_path, photo.thumb_path);
   await db.runAsync('DELETE FROM photos WHERE item_id = ?', id);
-  await db.runAsync('DELETE FROM attributes WHERE item_id = ?', id);
-  await db.runAsync('DELETE FROM items WHERE id = ?', id);
+
 }
 
 /** 品类清单（衣橱筛选用） */

@@ -60,6 +60,10 @@ export async function savePlan(input: PlanInput, name: string | null): Promise<S
   const now = new Date().toISOString();
 
   await db.withTransactionAsync(async () => {
+    for (const item of input.itemIds) {
+      const current = await db.getFirstAsync<{ status: string }>('SELECT status FROM items WHERE id = ?', item.itemId);
+      if (!current || current.status !== 'active') throw new Error('搭配含已删除或不可用的衣物，请重新选择后保存');
+    }
     await db.runAsync(
       `INSERT INTO plans (id, parent_id, version, name, basis_item_id, wear_slot, wear_style, reason,
          scene_city, scene_day, scene_name, source, created_at, updated_at)

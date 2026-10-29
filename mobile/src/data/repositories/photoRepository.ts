@@ -126,7 +126,7 @@ export async function getMainPhotoPaths(
 ): Promise<{ originalPath: string; thumbPath: string } | null> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ original_path: string; thumb_path: string }>(
-    "SELECT original_path, thumb_path FROM photos WHERE item_id = ? AND kind = 'main' LIMIT 1",
+    "SELECT original_path, thumb_path FROM photos WHERE item_id = ? AND kind = 'main' AND EXISTS (SELECT 1 FROM items WHERE items.id = photos.item_id AND items.status != 'deleted') LIMIT 1",
     itemId,
   );
   return row ? { originalPath: row.original_path, thumbPath: row.thumb_path } : null;
@@ -138,4 +138,39 @@ export function deletePhotoFiles(originalPath: string, thumbPath: string): void 
     const file = new File(Paths.document, p);
     if (file.exists) file.delete();
   }
+}
+
+/**
+ * 按衣物主图引用（items.main_photo_id）解析稳定的分析输入照片。
+ * 不用 kind='main' 兜底猜测，也不用列表缩略图替代分析证据。
+ * 衣物已删除或主图缺失时返回 null（调用方据此拒绝创建/提交任务）。
+ */
+export async function getMainPhotoForAnalysis(
+  itemId: string,
+): Promise<{ photoId: string; originalPath: string } | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ id: string; original_path: string }>(
+    `SELECT p.id AS id, p.original_path AS original_path
+       FROM items i JOIN photos p ON p.id = i.main_photo_id
+      WHERE i.id = ? AND i.status != 'deleted'`,
+    itemId,
+  );
+  return row ? { photoId: row.id, originalPath: row.original_path } : null;
+}
+
+export type AnalysisImageResult =
+  | { ok: true; photoId: string; dataUrl: string }
+  | { ok: false; reason: 'photo_missing' | 'file_missing' };
+
+/**
+ * 读取分析用图片：本件原件副本（photos/ 下 ≤2048px 的 JPEG），转成内存 data URL。
+ * 发送前校验文件仍在（删除或清理后的路径不得再作为输入）；不返回本地 file URI。
+ */
+export async function readAnalysisImage(itemId: string): Promise<AnalysisImageResult> {
+  const photo = await getMainPhotoForAnalysis(itemId);
+  if (!photo) return { ok: false, reason: 'photo_missing' };
+  const file = new File(Paths.document, photo.originalPath);
+  if (!file.exists) return { ok: false, reason: 'file_missing' };
+  const base64 = await file.base64();
+  return { ok: true, photoId: photo.photoId, dataUrl: `data:image/jpeg;base64,${base64}` };
 }

@@ -25,12 +25,9 @@ async function getOrCreateKey(): Promise<string> {
   return key;
 }
 
-async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
-  const versionRow = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-  const version = versionRow?.user_version ?? 0;
-
-  if (version < 1) {
-    await db.execAsync(`
+/** v1：M2 基础表（单品/照片/属性/偏好/场景默认） */
+async function migrateToV1(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.execAsync(`
       CREATE TABLE IF NOT EXISTS items (
         id TEXT PRIMARY KEY NOT NULL,
         status TEXT NOT NULL DEFAULT 'draft',
@@ -78,12 +75,12 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
         updated_at TEXT NOT NULL
       );
     `);
-    await db.execAsync('PRAGMA user_version = 1');
-  }
+  await db.execAsync('PRAGMA user_version = 1');
+}
 
-  if (version < 2) {
-    // M3：方案（收藏）与穿着记录。契约结构见 packages/contract（1.0.0-draft）。
-    await db.execAsync(`
+/** v2：M3 方案（收藏）与穿着记录。契约结构见 packages/contract */
+async function migrateToV2(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.execAsync(`
       CREATE TABLE IF NOT EXISTS plans (
         id TEXT PRIMARY KEY NOT NULL,
         parent_id TEXT,
@@ -117,7 +114,89 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_worn_plan ON worn_records(plan_id);
     `);
-    await db.execAsync('PRAGMA user_version = 2');
+  await db.execAsync('PRAGMA user_version = 2');
+}
+
+/**
+ * v3（分批执行手册 §3.2）：衣物分析任务、属性状态列、默认视觉模型。
+ * schema 变更与 user_version 更新在同一事务内：中途失败整体回滚，保留原库，不清库。
+ *
+ * 事务方式：使用同一连接事务（withTransactionAsync），不使用 withExclusiveTransactionAsync。
+ * 原因（2026-10-29 项目用户确认，替代手册原文的 exclusive 要求）：expo-sqlite 的
+ * withExclusiveTransactionAsync 会新建原生连接且不继承 SQLCipher 密钥，加密库上会因缺少
+ * PRAGMA key 而失败；本库为 SQLCipher 全库加密，必须复用已带密钥的连接。
+ */
+async function migrateToV3(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await db.execAsync(`
+        ALTER TABLE items ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE attributes ADD COLUMN value_state TEXT NOT NULL DEFAULT 'known';
+        ALTER TABLE attributes ADD COLUMN value_format TEXT NOT NULL DEFAULT 'text';
+        ALTER TABLE attributes ADD COLUMN analysis_task_id TEXT;
+      `);
+    // 旧记录 value 为 NULL 表示“未知”，不用空字符串冒充
+    await db.execAsync("UPDATE attributes SET value_state = 'unknown' WHERE value IS NULL");
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS tasks (
+          id TEXT PRIMARY KEY NOT NULL,
+          kind TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          input_revision INTEGER NOT NULL,
+          attempt INTEGER NOT NULL,
+          photo_id TEXT NOT NULL,
+          input_key TEXT NOT NULL,
+          request_key TEXT NOT NULL UNIQUE,
+          config_id TEXT NOT NULL,
+          config_snapshot TEXT NOT NULL,
+          config_revision TEXT NOT NULL,
+          contract_version TEXT NOT NULL,
+          prompt_version TEXT NOT NULL,
+          retry_of_task_id TEXT,
+          result_json TEXT,
+          error_kind TEXT,
+          error_summary TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_item_created ON tasks(item_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_active_item ON tasks(item_id) WHERE status IN ('queued', 'running');
+        CREATE TABLE IF NOT EXISTS ai_task_preferences (
+          kind TEXT PRIMARY KEY NOT NULL,
+          default_config_id TEXT NOT NULL
+        );
+      `);
+    await db.execAsync('PRAGMA user_version = 3');
+  });
+}
+
+/**
+ * 各版本迁移步骤（顺序执行，每步把库推进到对应 user_version）。
+ * 导出用于测试：测试必须调用这里的生产迁移步骤构造 v1/v2 库，
+ * 不能在测试里另复制一套建表 SQL（分批执行手册 P2）。
+ */
+export const schemaMigrations: ReadonlyArray<{
+  version: number;
+  up: (db: SQLite.SQLiteDatabase) => Promise<void>;
+}> = [
+  { version: 1, up: migrateToV1 },
+  { version: 2, up: migrateToV2 },
+  { version: 3, up: migrateToV3 },
+];
+
+/**
+ * 按 user_version 依次执行未完成的迁移（可测试）：只依赖 execAsync / getFirstAsync /
+ * withExclusiveTransactionAsync，不依赖真实设备密钥或 SQLCipher 打开流程（分批执行手册 §3.3）。
+ * 规则：不删除、不重建、不清空数据库；失败保留原库。
+ */
+export async function runMigrations(db: SQLite.SQLiteDatabase): Promise<void> {
+  const versionRow = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  const version = versionRow?.user_version ?? 0;
+  for (const step of schemaMigrations) {
+    if (version < step.version) await step.up(db);
   }
 }
 
@@ -148,7 +227,7 @@ async function openAndMigrate(): Promise<SQLite.SQLiteDatabase> {
   await db.execAsync(`PRAGMA key = '${key}'`);
   // 校验密钥正确（错误密钥下任何查询都会报"文件不是数据库"）
   await db.getFirstAsync('SELECT count(*) FROM sqlite_master');
-  await migrate(db);
+  await runMigrations(db);
   return db;
 }
 
