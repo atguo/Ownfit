@@ -6,7 +6,7 @@ import { getDb } from '../db';
 
 export interface SceneDefault {
   city: string;
-  day: string;
+  day: '今天' | '明天';
   scene: string;
 }
 
@@ -36,7 +36,7 @@ export async function setPreferences(values: string[]): Promise<void> {
 
 export async function getSceneDefault(): Promise<SceneDefault | null> {
   const db = await getDb();
-  const row = await db.getFirstAsync<{ city: string; day: string; scene: string }>(
+  const row = await db.getFirstAsync<{ city: string; day: '今天' | '明天'; scene: string }>(
     'SELECT city, day, scene FROM scene_default WHERE id = 1',
   );
   return row ?? null;

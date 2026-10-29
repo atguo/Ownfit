@@ -124,7 +124,7 @@ export default function ComponentsScreen() {
       </Section>
 
       <Section title="搭配板">
-        <OutfitBoard topId={store.top} lockLabel="炭灰色阔腿裤" />
+        <OutfitBoard topId="knit" lockLabel="炭灰色阔腿裤" />
       </Section>
 
       <Section title="标签 · 提示块 · 轻提示">

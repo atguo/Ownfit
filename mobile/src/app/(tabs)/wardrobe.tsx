@@ -15,6 +15,7 @@ import {
 } from '../../data/repositories/itemRepository';
 import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
 import { categories, type ItemCategory } from '../../data/demo';
+import { startOutfitFrom } from '../../features/outfitSession';
 import { colors, type } from '../../ui/tokens';
 
 const filters: ('全部' | ItemCategory)[] = ['全部', ...categories];
@@ -157,6 +158,11 @@ export default function WardrobeScreen() {
         onChanged={() => {
           setDetail(null);
           void load();
+        }}
+        onUse={(id) => {
+          void startOutfitFrom(id).then((ok) => {
+            if (ok) router.push('/outfit');
+          });
         }}
       />
     </Page>

@@ -1,76 +1,105 @@
-import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { Image, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Page } from '../ui/Screen';
 import { BackTitle } from '../ui/PageTop';
 import { Button } from '../ui/components/Button';
 import { Tag } from '../ui/components/Basics';
 import { Icon } from '../ui/Icon';
-import { OutfitBoard } from '../ui/components/OutfitBoard';
-import { ItemArt } from '../ui/components/ItemArt';
+import { RealOutfitBoard } from '../ui/components/RealOutfitBoard';
+import { Sheet } from '../ui/components/Sheet';
 import { WearSheet } from '../features/sheets/WearSheet';
-import { ReplaceSheet } from '../features/sheets/ReplaceSheet';
+import { SlotReplaceSheet } from '../features/sheets/SlotReplaceSheet';
 import {
-  PreviewSheet,
-  ReferencePrepareSheet,
-  type PreviewSheetState,
-} from '../features/sheets/PreviewSheets';
-import {
-  getPieceIds,
-  getItem,
-  isCurrentSaved,
-  markPreviewReady,
+  buildContractPlan,
+  getOutfitSession,
+  missingSlots,
   outfitHistoryLength,
   outfitUndo,
-  saveOutfit,
-  setReference,
+  replaceSlot,
+  setWear,
   toggleLock,
-  useDemoStore,
-} from '../features/demoStore';
+  useOutfitSession,
+  slotGapMessage,
+  slotLabels,
+  type OutfitSlot,
+} from '../features/outfitSession';
+import { getContextSnapshot } from '../features/demoStore';
+import { findDuplicate, saveContractPlan } from '../data/repositories/planRepository';
+import { getItem } from '../data/repositories/itemRepository';
+import { getMainPhotoPaths } from '../data/repositories/photoRepository';
+import { photoUri } from '../data/repositories/photoRepository';
 import { useToast } from '../ui/components/Toast';
 import { colors, type } from '../ui/tokens';
 
-// 搭配与局部调整（原型 outfit()）：搭配板、清单（锁定/替换）、穿法、撤销、收藏、预览入口。
+// M3 搭配（真实会话）：锁定/替换/穿法/撤销 → 保存为方案（契约校验后入库）。
+// 缺失槽位按缺口表达（不虚构完整组合）；上身预览未接入（诚实提示，不显示虚构图）。
+
+interface SlotView {
+  slot: OutfitSlot;
+  itemId: string;
+  name: string;
+  category: string;
+  thumbUri: string | null;
+}
+
 export default function OutfitScreen() {
   const router = useRouter();
   const toast = useToast();
-  const store = useDemoStore();
+  const session = useOutfitSession();
+  const [slotViews, setSlotViews] = useState<Record<string, SlotView>>({});
   const [wearOpen, setWearOpen] = useState(false);
-  const [replaceId, setReplaceId] = useState<string | null>(null);
-  const [previewSheet, setPreviewSheet] = useState<PreviewSheetState | 'reference'>(null);
+  const [replaceSlotOpen, setReplaceSlotOpen] = useState<OutfitSlot | null>(null);
+  const [previewNotice, setPreviewNotice] = useState(false);
 
-  const selectItem = getItem(store.select);
-  const savedAlready = isCurrentSaved();
-  const pieces = getPieceIds();
+  const presentSlots = (['dress', 'top', 'bottom', 'shoes'] as OutfitSlot[]).filter(
+    (slot) => session.slots[slot],
+  );
+  const missing = missingSlots(session.slots);
 
-  const outfitTitle =
-    store.top === 'sage'
-      ? '多一点松弛感。'
-      : store.top === 'blue'
-        ? '清爽，也很利落。'
-        : '舒服得刚刚好。';
-  const reason =
-    store.top === 'sage'
-      ? '柔和的绿色让灰色更轻盈，敞开穿也更自在。\n晚间降温时，可另选一件外层。'
-      : '浅色上衣让整体更轻盈，阔腿线条保留舒服的余地。\n晚间降温时，可另选一件外层。';
-
-  // 原型 startPreview：未准备参考先引导，否则 900ms 模拟等待后进入预览
-  function startPreview() {
-    if (!store.reference) {
-      setPreviewSheet('reference');
-      return;
+  // 槽位单品数据解析（异步 DB）
+  const loadSlotViews = useCallback(async () => {
+    const result: Record<string, SlotView> = {};
+    for (const [slot, itemId] of Object.entries(session.slots)) {
+      if (!itemId) continue;
+      const item = await getItem(itemId);
+      if (!item) continue;
+      const paths = await getMainPhotoPaths(itemId);
+      result[slot] = {
+        slot: slot as OutfitSlot,
+        itemId,
+        name: item.name ?? item.category ?? '未命名',
+        category: item.category ?? '未分类',
+        thumbUri: paths ? photoUri(paths.thumbPath) : null,
+      };
     }
-    setPreviewSheet('loading');
-  }
+    setSlotViews(result);
+  }, [session.slots]);
+
+  useEffect(() => {
+    void loadSlotViews();
+  }, [loadSlotViews]);
 
   function save() {
-    const result = saveOutfit();
-    toast(
-      result === 'duplicate'
-        ? '这套已经收藏，可以在“搭配”里找到'
-        : '已收藏到“我的搭配”，尚未标记穿过',
-    );
+    const scene = getContextSnapshot();
+    const plan = buildContractPlan(`plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, {
+      city: scene.city,
+      day: scene.day,
+      scene: scene.scene,
+    });
+    const pieces = plan.items.map((i) => i.itemId);
+    void (async () => {
+      const duplicate = await findDuplicate(pieces, plan.wear.style);
+      if (duplicate) {
+        toast('这套已经收藏，可以在“搭配”里找到');
+        return;
+      }
+      await saveContractPlan(plan, null);
+      toast('已收藏到“我的搭配”，尚未标记穿过');
+    })();
   }
+
+  const parentDiff = parentDiffText(session.parentItemIds, session.slots);
 
   return (
     <Page>
@@ -90,132 +119,133 @@ export default function OutfitScreen() {
           ) : null
         }
       />
-      <Tag icon="info" label="演示数据 · 来自示例衣橱" />
-      <View style={styles.outfitTitle}>
-        <Text style={[type.titleLg, styles.outfitTitleText]}>{outfitTitle}</Text>
-        <Text style={styles.subtitle}>
-          {store.context.day} · {store.context.scene} · {store.context.temp}
-        </Text>
-      </View>
+      <Tag icon="closet" label="来自真实衣橱" />
+      {session.parentLabel ? (
+        <Text style={styles.parentLine}>复用自「{session.parentLabel}」{parentDiff}</Text>
+      ) : null}
 
-      <OutfitBoard topId={store.top} lockLabel={selectItem?.name} />
+      <RealOutfitBoard
+        slots={{
+          top: slotViews['top']?.thumbUri ?? null,
+          dress: slotViews['dress']?.thumbUri ?? null,
+          bottom: slotViews['bottom']?.thumbUri ?? null,
+          shoes: slotViews['shoes']?.thumbUri ?? null,
+        }}
+        lockLabel={session.locks.length ? '含锁定单品' : undefined}
+        caption="已录入衣橱的组合"
+      />
 
-      <View style={styles.reason}>
-        <Icon name="leaf" size={17} color={colors.reasonIcon} />
-        <Text style={styles.reasonText}>{reason}</Text>
-      </View>
-
-      {pieces.map((id) => {
-        const item = getItem(id);
-        if (!item) return null;
-        const locked = store.locks.includes(id);
+      {presentSlots.map((slot) => {
+        const view = slotViews[slot];
+        const itemId = session.slots[slot] as string;
+        const locked = session.locks.includes(itemId);
         return (
-          <View key={id} style={styles.pieceRow}>
-            <ItemArt x={item.x} y={item.y} radius={9} style={styles.pieceArt} />
+          <View key={slot} style={styles.pieceRow}>
+            {view?.thumbUri ? (
+              <Image source={{ uri: view.thumbUri }} style={styles.pieceArt} resizeMode="cover" />
+            ) : (
+              <View style={[styles.pieceArt, styles.piecePlaceholder]} />
+            )}
             <View style={styles.pieceText}>
-              <Text style={styles.pieceName}>{item.name}</Text>
+              <Text style={styles.pieceName} numberOfLines={1}>
+                {view?.name ?? '加载中…'}
+              </Text>
               <Text style={styles.pieceNote}>
-                {locked ? '已锁定，替换时保留' : '可换成其他喜欢的单品'}
+                {locked ? '已锁定，替换时保留' : `可换成其他${slotLabels[slot]}`}
               </Text>
             </View>
             <Button
               variant="small"
               icon={locked ? 'lock' : 'unlock'}
-              accessibilityLabel={`${locked ? '解锁' : '锁定'}${item.name}`}
+              accessibilityLabel={`${locked ? '解锁' : '锁定'}${view?.name ?? ''}`}
               locked={locked}
-              onPress={() => toggleLock(id)}
+              onPress={() => toggleLock(itemId)}
             />
             <Button
               variant="small"
               label="换一件"
-              onPress={() => {
-                if (locked) {
-                  toast('这件已锁定。解锁后才能替换。');
-                  return;
-                }
-                setReplaceId(id);
-              }}
+              disabled={locked}
+              onPress={() => setReplaceSlotOpen(slot)}
             />
           </View>
         );
       })}
 
+      {missing.map((slot) => (
+        <View key={slot} style={[styles.pieceRow, styles.missingRow]}>
+          <View style={[styles.pieceArt, styles.missingPlaceholder]} />
+          <View style={styles.pieceText}>
+            <Text style={styles.pieceName}>{slotLabels[slot]}</Text>
+            <Text style={styles.pieceNote}>{slotGapMessage(slot)}</Text>
+          </View>
+          <Button variant="small" label="添加" onPress={() => router.push('/add')} />
+        </View>
+      ))}
+
       <View style={styles.wearing}>
-        <Text style={styles.wearingText}>穿法 · {store.wear}</Text>
+        <Text style={styles.wearingText}>穿法 · {session.wear}</Text>
         <Button variant="text" label="调整穿法" onPress={() => setWearOpen(true)} />
       </View>
 
       <View style={styles.actions}>
-        <Button variant="primary" icon="spark" label="看看上身效果" onPress={startPreview} />
         <Button
-          variant="secondary"
+          variant="primary"
           icon="bookmark"
-          saved={savedAlready}
-          accessibilityLabel="收藏这套搭配"
+          label="保存这套搭配"
           onPress={save}
         />
+        <Button
+          variant="secondary"
+          icon="spark"
+          accessibilityLabel="上身预览"
+          onPress={() => setPreviewNotice(true)}
+        />
       </View>
-      <Text style={styles.underNote}>可以先保存搭配，预览稍后再看</Text>
+      <Text style={styles.underNote}>上身预览将随 AI 能力接入开放，当前版本不生成预览图</Text>
 
       <WearSheet visible={wearOpen} onClose={() => setWearOpen(false)} />
-      <ReplaceSheet
-        targetId={replaceId}
-        onClose={() => setReplaceId(null)}
+      <SlotReplaceSheet
+        slot={replaceSlotOpen}
+        currentItemId={replaceSlotOpen ? session.slots[replaceSlotOpen] ?? null : null}
+        onClose={() => setReplaceSlotOpen(null)}
         onGoAdd={() => {
-          setReplaceId(null);
+          setReplaceSlotOpen(null);
           router.push('/add');
         }}
       />
 
-      {/* 预览流程弹层：参考引导 / 900ms 模拟等待 / 失败体验 */}
-      <ReferencePrepareSheet
-        visible={previewSheet === 'reference'}
-        onClose={() => setPreviewSheet(null)}
-        onUseDemo={() => {
-          setReference(true);
-          setPreviewSheet('loading');
-        }}
-      />
-      <PreviewSheet
-        state={previewSheet === 'reference' ? null : previewSheet}
-        onClose={() => setPreviewSheet(null)}
-        onReady={() => {
-          markPreviewReady();
-          setPreviewSheet(null);
-          router.push('/preview');
-        }}
-        onShowFail={() => setPreviewSheet('fail')}
-        onRetry={() => setPreviewSheet('loading')}
-      />
+      {previewNotice ? (
+        <Sheet visible title="上身预览未接入" onClose={() => setPreviewNotice(false)}>
+          <Text style={styles.description}>
+            {'上身预览将随 AI 能力接入开放。当前版本不生成预览图，\n避免以虚构效果代替你的真实穿着。搭配已保留，可先收藏。'}
+          </Text>
+          <Button variant="primary" label="知道了" onPress={() => setPreviewNotice(false)} />
+        </Sheet>
+      ) : null}
     </Page>
   );
 }
 
+function parentDiffText(parentItemIds: string[], slots: Partial<Record<OutfitSlot, string>>): string {
+  if (!parentItemIds.length) return '';
+  const changed = (Object.entries(slots) as [OutfitSlot, string][])
+    .filter(([, id]) => id && !parentItemIds.includes(id))
+    .map(([slot]) => slotLabels[slot]);
+  return changed.length ? `较上一版：调整了 ${changed.join('、')}` : '沿用上一版组合';
+}
+
 const styles = StyleSheet.create({
-  outfitTitle: {
-    marginTop: 18,
-    marginBottom: 6,
-  },
-  outfitTitleText: {
-    color: colors.ink,
-  },
-  subtitle: {
-    fontSize: 12,
-    lineHeight: 19,
+  description: {
+    ...type.caption,
     color: colors.muted,
-    marginTop: 6,
+    lineHeight: 23,
+    marginBottom: 15,
   },
-  reason: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 13,
-  },
-  reasonText: {
-    flex: 1,
+  parentLine: {
     fontSize: 11,
-    lineHeight: 21,
-    color: colors.reasonText,
+    lineHeight: 16,
+    color: colors.muted,
+    marginTop: 8,
   },
   pieceRow: {
     flexDirection: 'row',
@@ -225,9 +255,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
   },
+  missingRow: {
+    opacity: 0.85,
+  },
   pieceArt: {
     width: 49,
+    height: 49,
+    borderRadius: 9,
+    backgroundColor: colors.artBg,
     flexShrink: 0,
+  },
+  piecePlaceholder: {
+    backgroundColor: colors.line,
   },
   pieceText: {
     flex: 1,
@@ -254,6 +293,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 16,
     color: colors.muted,
+  },
+  missingPlaceholder: {
+    backgroundColor: colors.line,
   },
   actions: {
     flexDirection: 'row',

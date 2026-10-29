@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { Icon } from '../Icon';
 import { colors, radius } from '../tokens';
-import { getItem } from '../../features/demoStore';
+import { demoItems } from '../../data/demo';
 import { ItemArt } from './ItemArt';
 
 // 搭配板，对应原型 .outfit-board：上衣/下装/鞋履三层绝对定位 + 右下角注 + 右上角锁定徽标。
@@ -34,7 +34,7 @@ export function OutfitBoard({
 }
 
 function BoardLayer({ id, style }: { id: string; style: object }) {
-  const item = getItem(id);
+  const item = demoItems.find((candidate) => candidate.id === id);
   if (!item) return null;
   // 原型对搭配板内图片使用 mix-blend multiply；RN Android 支持有限，
   // 雪碧图底色与板底色相近，未启用混合时视觉差异可忽略。
