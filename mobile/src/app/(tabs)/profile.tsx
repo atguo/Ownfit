@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Page } from '../../ui/Screen';
 import { PageTop } from '../../ui/PageTop';
 import { SettingRow } from '../../ui/components/Rows';
@@ -11,7 +11,8 @@ import {
   ReferenceSheet,
   ResetSheet,
 } from '../../features/sheets/ProfileSheets';
-import { useDemoStore } from '../../features/demoStore';
+import { setPrefs, useDemoStore } from '../../features/demoStore';
+import { getPreferences } from '../../data/repositories/settingsRepository';
 import { colors, radius, type } from '../../ui/tokens';
 
 type SheetName = 'prefs' | 'reference' | 'body' | 'privacy' | 'reset' | null;
@@ -22,6 +23,13 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { prefs, reference } = useDemoStore();
   const [sheet, setSheet] = useState<SheetName>(null);
+
+  // M2：偏好来自本地数据库；人物参考仍是演示状态（M5 接真实参考）
+  useFocusEffect(
+    useCallback(() => {
+      void getPreferences().then(setPrefs);
+    }, []),
+  );
 
   return (
     <Page>

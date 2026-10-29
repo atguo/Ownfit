@@ -1,37 +1,149 @@
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { Image, StyleSheet, Text, View } from 'react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
 import { Page } from '../ui/Screen';
 import { BackTitle } from '../ui/PageTop';
 import { Button } from '../ui/components/Button';
 import { Notice } from '../ui/components/Basics';
-import { ItemArt } from '../ui/components/ItemArt';
 import { ChipSelect, Field, TextField } from '../ui/components/Field';
 import { useToast } from '../ui/components/Toast';
-import { Icon } from '../ui/Icon';
-import { addItem } from '../features/demoStore';
+import { photoUri } from '../data/repositories/photoRepository';
+import {
+  confirmItem,
+  createDraftFromPhoto,
+  getMainThumb,
+  listItemIdsByStatus,
+  type WardrobeItem,
+} from '../data/repositories/itemRepository';
 import { categories, type ItemCategory } from '../data/demo';
 import { colors, radius, type } from '../ui/tokens';
 
-// 添加一件衣服（原型 add()）：轻量入库界面。M1 仅演示流程——相机/相册接入属 M2，
-// “拍照或从相册选择”以示例体验代替；名称校验与入库提示与原型一致。
+// 添加一件衣服（M2 真实版）：拍照/相册多选 → 每张自动建草稿 → 逐件确认品类入库。
+// 规则：取消选图不建任何草稿；草稿持久化（重启可恢复）；品类确认前不入库。
+
+interface DraftView extends WardrobeItem {
+  thumbUri: string | null;
+}
+
 export default function AddScreen() {
   const router = useRouter();
   const toast = useToast();
-  const [draft, setDraft] = useState<{ name: string; cat: ItemCategory } | null>(null);
-  const [name, setName] = useState('');
+  const [drafts, setDrafts] = useState<DraftView[]>([]);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
 
-  function save() {
-    if (!name.trim()) {
-      toast('请给这件衣服一个名字');
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        const ids = await listItemIdsByStatus('draft');
+        const views: DraftView[] = [];
+        for (const id of ids) {
+          const thumbUri = await getMainThumb(id);
+          views.push({
+            id,
+            status: 'draft',
+            category: null,
+            name: null,
+            sourceType: 'photo',
+            mainPhotoId: null,
+            thumbUri: thumbUri ? photoUri(thumbUri) : null,
+            createdAt: '',
+            updatedAt: '',
+          });
+        }
+        if (active) setDrafts(views);
+      })();
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
+
+  // 选图 → 逐张建草稿（任何一张失败即中止并提示，已建的草稿保留——不丢已选内容）
+  async function pickAndCreate(picker: () => Promise<ImagePicker.ImagePickerResult>) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await picker();
+      if (result.canceled || !result.assets?.length) return; // 取消：不建草稿
+
+      let created = 0;
+      for (const asset of result.assets) {
+        const clientRef = `pick-${asset.assetId ?? asset.uri}-${Date.now().toString(36)}`;
+        try {
+          const item = await createDraftFromPhoto(asset.uri, clientRef, asset.width, asset.height);
+          const thumbUri = await getMainThumb(item.id);
+          const view: DraftView = { ...item, thumbUri: thumbUri ? photoUri(thumbUri) : null };
+          setDrafts((prev) => [...prev, view]);
+          created += 1;
+        } catch (error) {
+          toast(`第 ${created + 1} 张保存失败：${error instanceof Error ? error.message : String(error)}`);
+          break;
+        }
+      }
+      if (created > 0) toast(created > 1 ? `已存入 ${created} 份草稿，逐件确认即可入库` : '已存入草稿，确认品类即可入库');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function takePhoto() {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      // 验收①：拒绝权限可走替代路径
+      toast('相机权限被拒绝，可改用“从相册选择”入库');
       return;
     }
-    if (draft) {
-      addItem({ name: name.trim(), cat: draft.cat });
+    await pickAndCreate(() =>
+      ImagePicker.launchCameraAsync({ quality: 1, exif: false }),
+    );
+  }
+
+  async function pickFromLibrary() {
+    await pickAndCreate(() =>
+      ImagePicker.launchImageLibraryAsync({
+        allowsMultipleSelection: true,
+        selectionLimit: 10,
+        quality: 1,
+        exif: false,
+      }),
+    );
+  }
+
+  async function confirmDraft(draft: DraftView, category: ItemCategory | undefined) {
+    if (!category) {
+      toast('请先选择品类');
+      return;
     }
-    setDraft(null);
-    router.back();
+    await confirmItem(draft.id, { category, name: names[draft.id] });
+    setDrafts((prev) => prev.filter((d) => d.id !== draft.id));
     toast('已入库，尺寸和细节以后再补');
+  }
+
+  function renderDraft(draft: DraftView) {
+    return (
+      <View key={draft.id} style={styles.draftCard}>
+        {draft.thumbUri ? (
+          <Image source={{ uri: draft.thumbUri }} style={styles.draftImage} resizeMode="cover" />
+        ) : (
+          <View style={[styles.draftImage, styles.draftPlaceholder]} />
+        )}
+        <View style={styles.draftBody}>
+          <TextField
+            value={names[draft.id] ?? ''}
+            onChangeText={(text) => setNames((prev) => ({ ...prev, [draft.id]: text }))}
+            placeholder="名称（可选）"
+            maxLength={30}
+          />
+          <View style={styles.categoryRow}>
+            <Text style={styles.categoryLabel}>品类（必选）</Text>
+          </View>
+          <CategoryPicker onConfirm={(category) => confirmDraft(draft, category)} />
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -41,52 +153,61 @@ export default function AddScreen() {
       <Text style={[type.titleXL, styles.title]}>从这一件开始。</Text>
       <Text style={styles.subtitle}>不用找尺子，也不用填写一整张表。</Text>
 
-      {draft ? (
+      {drafts.length === 0 ? (
         <>
-          <View style={styles.uploadPreview}>
-            <ItemArt x={0} y={100} radius={13} label="示例照片" />
-          </View>
-          <Field label="给它一个名字">
-            <TextField
-              value={name}
-              maxLength={30}
-              onChangeText={setName}
-              placeholder="例如：浅蓝色棉衬衫"
-              autoFocus
-            />
-          </Field>
-          <Field label="确认品类">
-            <ChipSelect options={categories} value={draft.cat} onChange={(cat) => setDraft({ ...draft, cat })} />
-          </Field>
-          <Notice>确认照片里是哪一件衣服即可。尺寸、面料和体感都可以以后再补。</Notice>
-          <Button variant="primary" label="保存到衣橱" onPress={save} />
-          <Button variant="text" label="重新选择照片" onPress={() => setDraft(null)} />
-        </>
-      ) : (
-        <>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => toast('相机与相册将在 M2 接入，先用示例体验')}
-            style={({ pressed }) => [styles.upload, pressed && styles.pressed]}>
-            <Icon name="camera" size={29} color={colors.uploadIcon} />
-            <Text style={styles.uploadTitle}>拍照或从相册选择</Text>
-            <Text style={styles.uploadHint}>拍清衣服整体，一张就可以</Text>
-          </Pressable>
+          <Button
+            variant="primary"
+            icon="camera"
+            label="拍照入库"
+            onPress={takePhoto}
+            disabled={busy}
+            style={styles.uploadGap}
+          />
           <Button
             variant="secondary"
-            label="先用示例体验"
-            onPress={() => {
-              setDraft({ name: '浅蓝色棉衬衫', cat: '上衣' });
-              setName('浅蓝色棉衬衫');
-            }}
+            icon="image"
+            label="从相册选择（可多选）"
+            onPress={pickFromLibrary}
+            disabled={busy}
             style={styles.full}
           />
           <Text style={styles.subtleInfo}>
-            {'照片仅保存在本机，不会上传。\n演示版不自动识别品类，请手动确认。'}
+            {'照片仅保存在本机，不会上传。\nAPP 不会自动识别品类，请手动确认。'}
           </Text>
+        </>
+      ) : (
+        <>
+          <Notice>{`有 ${drafts.length} 份草稿待确认。确认品类即入库；不确认的草稿会一直保留，随时回来继续。`}</Notice>
+          {drafts.map(renderDraft)}
+          <Button variant="primary" label="完成，回衣橱" onPress={() => router.back()} style={styles.full} />
         </>
       )}
     </Page>
+  );
+}
+
+function CategoryPicker({ onConfirm }: { onConfirm: (category: ItemCategory | undefined) => void }) {
+  const [selected, setSelected] = useState<ItemCategory | undefined>();
+  return (
+    <View>
+      <View style={styles.chipRow}>
+        {categories.map((category) => (
+          <Button
+            key={category}
+            variant="chip"
+            label={category}
+            active={selected === category}
+            onPress={() => setSelected(category)}
+          />
+        ))}
+      </View>
+      <Button
+        variant="primary"
+        label="确认入库"
+        onPress={() => onConfirm(selected)}
+        style={styles.confirmGap}
+      />
+    </View>
   );
 }
 
@@ -95,7 +216,6 @@ const styles = StyleSheet.create({
     ...type.footnote,
     color: colors.muted,
     marginTop: 17,
-    marginBottom: 0,
   },
   title: {
     color: colors.ink,
@@ -107,44 +227,12 @@ const styles = StyleSheet.create({
     color: colors.muted,
     marginTop: 6,
   },
-  upload: {
-    height: 190,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: colors.uploadBorder,
-    backgroundColor: colors.soft,
-    borderRadius: radius.empty,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 9,
-    marginVertical: 20,
-    alignSelf: 'stretch',
-  },
-  pressed: {
-    opacity: 0.8,
-  },
-  uploadIcon: {
-    marginBottom: 0,
-  },
-  uploadTitle: {
-    color: colors.ink,
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  uploadHint: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: colors.muted,
-  },
-  uploadPreview: {
-    width: 185,
-    height: 185,
-    alignSelf: 'center',
-    marginTop: 15,
-    marginBottom: 15,
+  uploadGap: {
+    marginTop: 20,
   },
   full: {
     alignSelf: 'stretch',
+    marginTop: 10,
   },
   subtleInfo: {
     ...type.footnote,
@@ -152,5 +240,44 @@ const styles = StyleSheet.create({
     color: colors.subtleInfo,
     marginTop: 15,
     textAlign: 'center',
+  },
+  draftCard: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 12,
+    borderRadius: radius.notice,
+    backgroundColor: colors.soft,
+    marginBottom: 12,
+  },
+  draftImage: {
+    width: 96,
+    height: 96,
+    borderRadius: radius.small,
+    backgroundColor: colors.artBg,
+  },
+  draftPlaceholder: {
+    backgroundColor: colors.line,
+  },
+  draftBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  categoryRow: {
+    marginTop: 10,
+    marginBottom: 2,
+  },
+  categoryLabel: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.ink,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6,
+  },
+  confirmGap: {
+    marginTop: 10,
   },
 });

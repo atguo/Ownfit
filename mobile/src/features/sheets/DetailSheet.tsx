@@ -50,7 +50,7 @@ export function DetailSheet({
   );
 }
 
-function DetailCell({ label, value }: { label: string; value: string }) {
+export function DetailCell({ label, value }: { label: string; value: string }) {
   return (
     <View>
       <Text style={styles.cellLabel}>{label}</Text>

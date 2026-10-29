@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Asset } from 'expo-asset';
 import { Page } from '../../ui/Screen';
 import { BackTitle } from '../../ui/PageTop';
 import { Button } from '../../ui/components/Button';
@@ -18,6 +19,8 @@ import { OutfitBoard } from '../../ui/components/OutfitBoard';
 import { ChipSelect, Field, TextField } from '../../ui/components/Field';
 import { useToast } from '../../ui/components/Toast';
 import { resetDemo, useDemoStore } from '../../features/demoStore';
+import { createDraftFromPhoto, confirmItem } from '../../data/repositories/itemRepository';
+import { categories } from '../../data/demo';
 import { colors, pagePadding, radius, type } from '../../ui/tokens';
 
 // 组件展示（M1 交付物）：设计令牌、组件与状态一屏陈列，并挂接演示数据切换（空衣橱态等）。
@@ -167,6 +170,32 @@ export default function ComponentsScreen() {
           {radius.base}
           {'dp。'}
         </Text>
+      </Section>
+
+      <Section title="性能验证（M2 验收：大量图片浏览）">
+        <Button
+          variant="secondary"
+          label="批量生成 30 件种子单品（写入真实数据库）"
+          onPress={async () => {
+            toast('开始生成种子数据…');
+            try {
+              const asset = Asset.fromModule(require('../../assets/demo/wardrobe.png'));
+              if (!asset.downloaded) await asset.downloadAsync();
+              const uri = asset.localUri ?? asset.uri;
+              for (let i = 0; i < 30; i += 1) {
+                const item = await createDraftFromPhoto(uri, `seed-${Date.now().toString(36)}-${i}`);
+                await confirmItem(item.id, {
+                  category: categories[i % categories.length],
+                  name: `种子单品 ${i + 1}`,
+                });
+              }
+              toast('已生成 30 件种子单品，去“衣橱”页验证滚动');
+            } catch (error) {
+              toast(`种子生成失败：${error instanceof Error ? error.message : String(error)}`);
+            }
+          }}
+        />
+        <Text style={styles.hint}>写入的是真实数据库（用于大量图片滚动与重启恢复验证），与演示开关互不影响。</Text>
       </Section>
     </Page>
   );

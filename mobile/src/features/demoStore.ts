@@ -231,6 +231,11 @@ export function togglePref(pref: string) {
   });
 }
 
+/** 用持久化值同步展示状态（M2：偏好来自 SQLite） */
+export function setPrefs(prefs: string[]) {
+  set({ prefs });
+}
+
 export function setReference(reference: boolean) {
   set({ reference, previewVersion: 0 });
 }
