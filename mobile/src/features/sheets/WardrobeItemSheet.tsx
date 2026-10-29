@@ -167,11 +167,11 @@ export function WardrobeItemSheet({
 
 const styles = StyleSheet.create({
   photo: {
-    width: 215,
-    height: 215,
+    width: 150,
+    height: 150,
     alignSelf: 'center',
     marginTop: 10,
-    marginBottom: 20,
+    marginBottom: 16,
     borderRadius: radius.buttonLg,
     backgroundColor: colors.artBg,
   },

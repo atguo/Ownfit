@@ -20,8 +20,10 @@ export function Sheet({ visible, title, onClose, children }: SheetProps) {
       animationType="slide"
       statusBarTranslucent
       onRequestClose={onClose}>
-      <Pressable style={styles.overlay} onPress={onClose} accessibilityLabel="关闭弹层">
-        <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+      <View style={styles.overlay}>
+        {/* 背板捕获层：独立于弹层之下，点遮罩关闭；不嵌套弹层内容，保证 ScrollView 手势灵敏 */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="关闭弹层" />
+        <View style={styles.sheet}>
           <View style={styles.handle} />
           {title != null && (
             <View style={styles.head}>
@@ -41,8 +43,8 @@ export function Sheet({ visible, title, onClose, children }: SheetProps) {
             contentContainerStyle={styles.content}>
             {children}
           </ScrollView>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
