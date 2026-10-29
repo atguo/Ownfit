@@ -2,13 +2,21 @@
 
 本文件适用于整个项目，是协作与开发的入口。开始工作时先阅读本文件，再阅读本次任务涉及的功能文档。保持修改范围与用户授权一致，保护已有文件和未提交改动。
 
+## 开始任务前
+
+1. 先运行 `git status --short`，保护已有修改和未跟踪文件；不执行未经授权的 reset、clean 或覆盖操作。
+2. 阅读本文件及任务涉及的功能文档；修改 `mobile/` 前阅读 [移动端约定](mobile/AGENTS.md)，修改 AI 实验前阅读 [实验约定](packages/experiments/AGENTS.md)。
+3. 用 `rg --files` 确认文件位置，再追踪页面 → 业务状态/契约 → repository → 数据库或文件的实际调用链。区分设计目标、代码现状和已验证行为。
+4. 保持最小必要修改，复用现有设计系统、存储入口和契约；未经请求不安装依赖、扩展功能或重构无关代码。
+5. 交付时说明修改内容、验证结果和未验证边界，并履行第 6 节的文档同步要求。
+
 ## 1. 项目定位与当前状态
 
 “衣见”（英文名 Ownfit）是移动设备上的个人穿搭推荐 APP，帮助用户从真实衣橱中筛选适合自己的搭配，通过 AI 本人预览和实际穿着反馈验证选择。
 
 核心价值是帮助用户选对穿搭。图片好看不能代替人物、衣服和上身效果的真实性；低录入负担也不能以伪造尺寸或面料信息为代价。
 
-当前处于第一版客户端实施阶段：M0（工程基线）、M1（客户端工程与设计系统）、M2（本地衣橱与持久化）已完成，M3（方案编辑与第一批收藏反馈）未开始。仓库已有项目计划、功能设计和可交互的浏览器 UI 原型；用户已认可按原型落地第一版。RN 工程于 2026-10-27 初始化（pnpm workspace：`mobile/` Expo 客户端、`packages/contract/` 契约包、`packages/experiments/` 实验包）。M1 交付设计系统与原生页面骨架，M2 交付本地持久化（SQLCipher 加密库、照片文件、真实录入与衣橱管理，见 `mobile/src/data/`）与 AI 服务配置管理（提前自 M5 落地，`mobile/src/services/ai/`）；搭配生成仍为演示态（M3 接真实数据），AI 识别/生成能力未接入（A 线实验推进中，M5 集成）。原型使用演示数据，不代表真实 AI、天气和持久化任务已实现。文档中的规划、开发默认和验收条件不代表模型效果已经验证。功能与架构变更后继续同步本节的目录、架构状态与可执行命令。
+当前处于第一版客户端实施阶段：M0（工程基线）、M1（客户端工程与设计系统）、M2（本地衣橱与持久化）已完成并验收，M3（方案编辑与第一批收藏反馈）实现完成、待真机验收。仓库已有项目计划、功能设计和可交互的浏览器 UI 原型；用户已认可按原型落地第一版。RN 工程于 2026-10-27 初始化（pnpm workspace：`mobile/` Expo 客户端、`packages/contract/` 契约包、`packages/experiments/` 实验包）。M1 交付设计系统与原生页面骨架，M2 交付本地持久化（SQLCipher 加密库、照片文件、真实录入与衣橱管理，见 `mobile/src/data/`）与 AI 服务配置管理（提前自 M5 落地，`mobile/src/services/ai/`）；M3 交付业务契约草案（contract 包，1.0.0-draft）与真实数据的选择/搭配/收藏链路；搭配中的 AI 识别/生成能力未接入（A 线实验推进中，M5 集成）。原型使用演示数据，不代表真实 AI、天气和持久化任务已实现。文档中的规划、开发默认和验收条件不代表模型效果已经验证。功能与架构变更后继续同步本节的目录、架构状态与可执行命令。
 
 ## 2. 文档职责与功能入口
 
@@ -16,6 +24,7 @@
 - [第一版开发计划](docs/开发计划.md)：原型到 RN 客户端的实施顺序、服务依赖、里程碑、交付与验收；不替代功能规格。
 - [UI 原型基准](docs/prototype/README.md)：已认可的视觉与交互范围、演示边界和运行入口。
 - [功能索引与维护约定](docs/functions/README.md)：功能状态、详细文档的结构与维护规则。
+- [里程碑实施记录](docs/里程碑实施记录.md)：各里程碑与 A 线的实施状态、验证结论、修复问题与 M4 蓝图存档；状态变更后同步。
 - `docs/functions/`：每个可独立讨论和验收的功能一份文档，说明如何设计、为什么这样设计、解决什么问题、数据与状态、异常和验收。
 - 本文件：跨功能约束、功能入口、技术方向、架构边界、开发验证与同步义务，不复制完整功能规格。
 
@@ -40,11 +49,11 @@
 
 允许根据实测需要引入或编写原生模块。不设“所有能力必须用 JavaScript 实现”的限制，也不因局部瓶颈直接重写整个 APP。先定位问题，再选择针对性优化、原生库或原生实现。
 
-React Native 负责界面与业务交互；原生能力负责相机、相册、图像解码及需要的平台集成；AI 通过用户手动配置的外部接口调用，APP 不内置模型，资料供 AI 使用按 APP 默认允许执行，不逐次询问。iOS、Android 的权限、键盘、返回手势、安全区域和无障碍分别验证，不把共享代码等同于平台行为完全一致。具体首发平台和支持系统版本待确定。
+React Native 负责界面与业务交互；原生能力负责相机、相册、图像解码及需要的平台集成；AI 通过用户手动配置的外部接口调用，APP 不内置模型，资料供 AI 使用按 APP 默认允许执行，不逐次询问。iOS、Android 的权限、键盘、返回手势、安全区域和无障碍分别验证，不把共享代码等同于平台行为完全一致。当前 Android 优先，最低 Android 12（API 31）；首发商店范围与 iOS 支持版本待确定。
 
 ### 3.2 本地数据架构
 
-用户资料仅在设备本地持久化：结构化数据使用本地数据库，原图、缩略图和结果图使用应用私有文件目录。SQLite 是待验证候选，库、加密及密钥保存方案在 M1/M2 确认。原件不能只放可清理缓存，系统云备份需排除并验证。
+用户资料仅在设备本地持久化：结构化数据使用本地数据库，原图、缩略图和结果图使用应用私有文件目录。M2 已采用 expo-sqlite + SQLCipher，数据库密钥保存在 expo-secure-store；实现入口为 `mobile/src/data/db.ts`。原件不能只放可清理缓存，系统云备份需排除并验证。
 
 不建设自有服务器、账号系统、云端资料库、对象存储或同步服务，取消此前后端候选。M2/M3 数据直接沿用；仍需本地 schema 升级与失败恢复。无云恢复，卸载和设备损坏的数据损失边界需告知；手动备份范围待确认。
 
@@ -86,7 +95,7 @@ React Native 负责界面与业务交互；原生能力负责相机、相册、�
 - 目标中端 Android 与 iPhone 的具体机型、支持版本、体验阈值待首轮验证确定；没有测量就不声称已达性能目标。
 - 区分代码检查、模拟器验证、真机行为和真实试穿结果，交付时准确说明验证边界。
 
-RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `pnpm install` 安装依赖；`pnpm typecheck` 全量类型检查；`pnpm start` 启动 Expo 开发服务器。首个验证平台为 Android（真机 OPPO Find X9 Pro，6.78 英寸 2772×1272、450ppi、1–120Hz）；导航采用 expo-router，路由在 `mobile/src/app/`。界面按窗口尺寸类别与安全区域适配不同屏幕，使用 dp 与弹性布局，不写死像素，保证系统字体缩放可用。仓库使用 Git，远程 `origin` 为 https://github.com/atguo/Ownfit.git。Android 调试工具链已于 2026-10-27 装于本机：Android Studio 2026.2（`D:\AndroidStudio`，其自带 JBR 25 兼作 Gradle 的 JAVA_HOME）、SDK（`D:\tools\AndroidSDK`，platform android-37、build-tools 36.0.0、platform-tools）；用户级环境变量已设 `ANDROID_HOME`、`JAVA_HOME`、`GRADLE_USER_HOME`（`D:\tools\gradle-home`）、`ANDROID_USER_HOME`，`platform-tools` 已入 PATH，Gradle 缓存等大文件均落在 D 盘。`mobile` 已加入 `expo-dev-client` 依赖，`mobile/android/` 为 prebuild 生成目录（git 忽略，可重建）。真机连接与 Development Build 真机验收仍在 M1 落实；无自定义原生模块前仍可用 Expo Go 预览界面。已有浏览器原型可在项目根目录运行 `node prototype/server.cjs`，本机访问 `http://127.0.0.1:4173`。原型不是正式 APP，不能用其浏览器表现代替原生验收。后续命令以实际脚本为准登记，不编造尚不存在的入口。Windows 可承担日常开发，iOS 本地原生构建与调试需安排 macOS/Xcode 或相应构建环境，云构建不能替代真机验证。
+RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `pnpm install` 安装依赖；`pnpm typecheck` 全量类型检查；`pnpm start` 启动 Expo 开发服务器。首个验证平台为 Android（真机 OPPO Find X9 Pro，6.78 英寸 2772×1272、450ppi、1–120Hz）；导航采用 expo-router，路由在 `mobile/src/app/`。界面按窗口尺寸类别与安全区域适配不同屏幕，使用 dp 与弹性布局，不写死像素，保证系统字体缩放可用。仓库使用 Git，远程 `origin` 为 https://github.com/atguo/Ownfit.git。Android 调试工具链已于 2026-10-27 装于本机：Android Studio 2026.2（`D:\AndroidStudio`，其自带 JBR 25 兼作 Gradle 的 JAVA_HOME）、SDK（`D:\tools\AndroidSDK`，platform android-37、build-tools 36.0.0、platform-tools）；用户级环境变量已设 `ANDROID_HOME`、`JAVA_HOME`、`GRADLE_USER_HOME`（`D:\tools\gradle-home`）、`ANDROID_USER_HOME`，`platform-tools` 已入 PATH，Gradle 缓存等大文件均落在 D 盘。`mobile` 已加入 `expo-dev-client` 依赖，`mobile/android/` 为 prebuild 生成目录（git 忽略，可重建）。无线 adb 与 Development Build 已有真机验收记录（见第 8 节）；当前 SQLCipher 依赖原生构建，不以 Expo Go 作为完整客户端验证环境。已有浏览器原型可在项目根目录运行 `node prototype/server.cjs`，本机访问 `http://127.0.0.1:4173`。原型不是正式 APP，不能用其浏览器表现代替原生验收。后续命令以实际脚本为准登记，不编造尚不存在的入口。Windows 可承担日常开发，iOS 本地原生构建与调试需安排 macOS/Xcode 或相应构建环境，云构建不能替代真机验证。
 
 ## 6. 文档与项目同步：强制要求
 
@@ -139,12 +148,38 @@ RN 工程框架已初始化：包管理器为 pnpm（workspace）。根目录 `p
 
 M1（客户端工程与设计系统）已于 2026-10-27 实现完成：设计令牌与组件库（`mobile/src/ui/`）、四个 Tab 主入口与 choose/outfit/preview/add 任务页的原生导航映射（`mobile/src/app/`）、弹层（`src/features/sheets/`）、组件展示页（`/dev/components`，从"我的"页开发区进入）；演示数据为内存态、与真实资料隔离，M2 接入本地数据库后替换。支持系统版本确定为 Android 12（API 31）及以上（minSdkVersion=31），首发商店范围 M6 前定。Find X9 Pro 真机验证通过：导航与硬件返回栈、弹层关闭、字体缩放 1.3 与键盘不遮挡主操作（修复 hero 重叠与 edge-to-edge 键盘失效两个问题）、视觉经原型对照。**同日项目用户真机验收通过，M1 计完成。**
 
-实施顺序调整（2026-10-27，项目用户确认）：**A 线提前为当前主线**，优先衣物理解与上身预览两条工作流（项目用户定为必要能力；搭配推荐顺延，顺延原因与恢复条件记入 experiments 包 README）；M2 其三个前置决定已获确认——录入入口=实物拍照+相册多选建草稿（链接解析与多单品分离顺延至 AI 接入后）、删除=归档为主+彻底删除二次确认级联删文件、存储方向=expo-sqlite + SQLCipher 全库加密且密钥存设备安全存储（M2 实施验证后锁定）。A 线实验在 `packages/experiments/` 进行（实验纪律见该包 AGENTS.md）：脚本直连项目用户自有服务（GLM 图像理解 + DeepSeek 文本，均 OpenAI 兼容），凭证只存本机 `.env`、样本照片不入版本库。上身预览的生成服务选型已定：MiniMax `image-01`（`subject_reference` 仅支持人物肖像，服装一致性靠 prompt 传达——该边界由实验量化），适配器与跑批脚本在 `packages/experiments/src/try-on-preview/`。**APP 内 AI 配置管理已提前落地**（原 M5 范围的配置管理部分提前，2026-10-27 项目用户确认）：入口在"我的"页，多配置 + 能力标签（文本/视觉/图像生成）即任务路由最小实现；API Key 存设备安全存储、非敏感配置存应用私有 JSON（M2 建库时迁入）；URL 类型首批为 OpenAI 兼容与 MiniMax 图像；测试连接按类型区分（OpenAI 极小请求 / MiniMax 生成一张测试图）；自部署模型所需明文 HTTP 已放开（调试期放宽，M6 前收敛评估）。任务执行接入（解析/预览管线消费配置）仍属 M5；各项决定详见 AI 模型配置与接入文档"已决定"节。
+实施顺序调整（2026-10-27，项目用户确认）：**A 线提前为当前主线**，优先衣物理解与上身预览两条工作流（项目用户定为必要能力；搭配推荐顺延，顺延原因与恢复条件记入 experiments 包 README）；M2 其三个前置决定已获确认——录入入口=实物拍照+相册多选建草稿（链接解析与多单品分离顺延至 AI 接入后）、删除=归档为主+彻底删除二次确认级联删文件、存储方向=expo-sqlite + SQLCipher 全库加密且密钥存设备安全存储（M2 实施验证后锁定）。A 线实验在 `packages/experiments/` 进行（实验纪律见该包 AGENTS.md）：脚本直连项目用户自有服务（GLM 图像理解 + DeepSeek 文本，均 OpenAI 兼容），凭证只存本机 `.env`、样本照片不入版本库。上身预览的生成服务选型已定：MiniMax `image-01`（`subject_reference` 仅支持人物肖像，服装一致性靠 prompt 传达——该边界由实验量化），适配器与跑批脚本在 `packages/experiments/src/try-on-preview/`。**APP 内 AI 配置管理已提前落地**（原 M5 范围的配置管理部分提前，2026-10-27 项目用户确认）：入口在"我的"页，多配置 + 能力标签（文本/视觉/图像生成）即任务路由最小实现；API Key 存设备安全存储、非敏感配置目前仍存应用私有 JSON（原计划 M2 建库时迁入数据库，但当前 `configStore.ts` 尚未实现迁移，保留为待处理差异）；URL 类型首批为 OpenAI 兼容与 MiniMax 图像；测试连接按类型区分（OpenAI 极小请求 / MiniMax 生成一张测试图）；自部署模型所需明文 HTTP 已放开（调试期放宽，M6 前收敛评估）。任务执行接入（解析/预览管线消费配置）仍属 M5；各项决定详见 AI 模型配置与接入文档"已决定"节。
 
-M2（本地衣橱与持久化）已于 2026-10-29 实现完成：SQLCipher 加密库（`expo-sqlite` 插件 `useSQLCipher` 开启，密钥 256 位随机、存安全存储，`PRAGMA key` 打开；已实测库文件头非明文）+ schema v1（items/photos/attributes/preferences/scene_default，`user_version` 迁移管理）；照片原件副本（≤2048px）+ 缩略图（480px）落盘于应用私有目录，文件写入失败回滚记录不留半成品；录入流程（拍照/相册多选→草稿→确认品类入库）、衣橱真实化（筛选/草稿区/详情编辑/归档/恢复/彻底删除）、偏好与场景默认持久化（当次与长期默认分离）；choose/outfit/preview 保持演示并加"演示数据"标注，组件展示页含 30 件种子生成（性能验证用）。开发调试环境注意：手机 Clash 代理会拦截开发服务器流量（需关闭或加直连规则）；SQLCipher 需 `expo-sqlite` 插件开关，编译进包后 `PRAGMA key` 激活。**同日项目用户真机验收通过（录入、详情、归档/删除、弹层滚动与重启恢复），M2 计完成；M3 未开始。**后续同步计划状态、证据、相关功能文档及本文件；商品匹配后期实现，反馈分三批。
+M2（本地衣橱与持久化）已于 2026-10-29 实现完成：SQLCipher 加密库（`expo-sqlite` 插件 `useSQLCipher` 开启，密钥 256 位随机、存安全存储，`PRAGMA key` 打开；已实测库文件头非明文）+ schema v1（items/photos/attributes/preferences/scene_default，`user_version` 迁移管理）；照片原件副本（≤2048px）+ 缩略图（480px）落盘于应用私有目录，文件写入失败回滚记录不留半成品；录入流程（拍照/相册多选→草稿→确认品类入库）、衣橱真实化（筛选/草稿区/详情编辑/归档/恢复/彻底删除）、偏好与场景默认持久化（当次与长期默认分离）；choose/outfit/preview 保持演示并加"演示数据"标注，组件展示页含 30 件种子生成（性能验证用）。开发调试环境注意：手机 Clash 代理会拦截开发服务器流量（需关闭或加直连规则）；SQLCipher 需 `expo-sqlite` 插件开关，编译进包后 `PRAGMA key` 激活。**同日项目用户真机验收通过（录入、详情、归档/删除、弹层滚动与重启恢复），M2 计完成；M3 尚未验收。**后续同步计划状态、证据、相关功能文档及本文件；商品匹配后期实现，反馈分三批。
+
+### 当前代码与阶段记录的差异（2026-10-29 核对）
+
+- `mobile/src/data/db.ts` 已包含 schema v2 的 plans、plan_items、worn_records 表；`repositories/planRepository.ts` 已有方案与穿着记录存储。上文 schema v1 是 M2 交付时的记录，不是当前代码的最新 schema。
+- `packages/contract/README.md` 标记契约为 `1.0.0-draft`，已有结构与校验；不能继续将 M3 描述为完全未开始，也不能据此认定契约已冻结或 M3 已通过真机验收。具体页面接入程度在对应任务中核查。
+- AI 非敏感配置仍使用私有 JSON。数据库迁移尚未落实，不能把原迁移计划当作已实现事实。
 
 ## 9. 未决事项处理约定（2026-10-27）
 
 用户已确认 AI 采用手动配置外部接口方式，详见 [AI 模型配置与接入](docs/functions/AI模型配置与接入.md)。其余评审未决事项现在不做决定，也不能将评审建议视为已接受。
 
 实施遇到需要决定的具体情况时，向项目用户说明实际场景、可选方案和影响，取得答复后再实施依赖该决定的部分；不影响的工作继续。这里的“询问用户”指开发协作中的项目用户，不是在 APP 内给终端用户新增弹窗，也不改变 AI 任务不逐次询问的规则。待确认项与触发时点见 [开发计划](docs/开发计划.md) 第 13 节，决定后同步本文件及归属文档。
+
+
+## 10. 常用命令与交付检查
+
+以下命令从仓库根目录执行，以 `package.json` 中实际脚本为准：
+
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm install` | 安装 workspace 依赖，仅在任务需要时执行 |
+| `pnpm start` | 启动 Expo 开发服务器 |
+| `pnpm typecheck` | 全量 TypeScript 检查 |
+| `pnpm --filter @ownfit/mobile android` | 本机构建并运行 Android 客户端，需要 SDK 和连接设备 |
+| `pnpm --filter @ownfit/mobile ios` | 构建并运行 iOS 客户端，需要 macOS/Xcode 环境 |
+| `node prototype/server.cjs` | 启动浏览器原型，默认地址见第 5 节 |
+
+- 修改代码后执行相关类型检查；涉及契约时核对契约包脚本并运行相关样例校验。不存在的 lint、test 或构建入口不要写成已可用命令。
+- 原生依赖或 Expo 插件配置变更需重新生成/构建 Development Build；配置入口为 `mobile/app.json`，不要仅靠 Metro 热更新验证。
+- 纯文档修改检查差异、相对链接及与代码的一致性，无需为此执行原生构建。
+- 交付前运行 `git diff --check` 与 `git status --short`，确认只修改授权范围；不自动提交或推送。
+- 类型检查通过、原型交互通过、真机验收、AI 效果验证分别报告，不能互相替代。既有验收记录不等于本次重新验证。
