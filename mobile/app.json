@@ -34,7 +34,18 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-sqlite",
+        {
+          "android": {
+            "useSQLCipher": true
+          },
+          "ios": {
+            "useSQLCipher": true
+          }
+        }
+      ]
     ]
   }
 }

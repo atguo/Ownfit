@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Page } from '../../ui/Screen';
@@ -8,7 +8,8 @@ import { Icon } from '../../ui/Icon';
 import { ItemArt, LookArt } from '../../ui/components/ItemArt';
 import { Tag } from '../../ui/components/Basics';
 import { SceneSheet } from '../../features/sheets/SceneSheet';
-import { useDemoStore } from '../../features/demoStore';
+import { setContext, useDemoStore } from '../../features/demoStore';
+import { getSceneDefault } from '../../data/repositories/settingsRepository';
 import { colors, radius, type } from '../../ui/tokens';
 
 const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
@@ -20,6 +21,13 @@ export default function TodayScreen() {
   const [sceneOpen, setSceneOpen] = useState(false);
   const now = new Date();
   const dateLine = `${now.getMonth() + 1}月${now.getDate()}日，星期${weekdays[now.getDay()]}`;
+
+  // M2：常用场景默认值从本地数据库回填（天气文档 §4.1：默认值可见且可修改）
+  useEffect(() => {
+    void getSceneDefault().then((saved) => {
+      if (saved) setContext(saved);
+    });
+  }, []);
 
   return (
     <Page>

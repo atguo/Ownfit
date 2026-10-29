@@ -90,7 +90,7 @@ export default function OutfitScreen() {
           ) : null
         }
       />
-      <Tag icon="closet" label="来自你的衣橱" />
+      <Tag icon="info" label="演示数据 · 来自示例衣橱" />
       <View style={styles.outfitTitle}>
         <Text style={[type.titleLg, styles.outfitTitleText]}>{outfitTitle}</Text>
         <Text style={styles.subtitle}>

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Sheet } from '../../ui/components/Sheet';
 import { ChoiceRow } from '../../ui/components/Rows';
@@ -5,37 +6,59 @@ import { Notice } from '../../ui/components/Basics';
 import { Button } from '../../ui/components/Button';
 import { useToast } from '../../ui/components/Toast';
 import { colors, type } from '../../ui/tokens';
-import { resetDemo, setReference, togglePref, useDemoStore } from '../demoStore';
+import { getPreferences, saveSceneDefault, setPreferences } from '../../data/repositories/settingsRepository';
+import { resetDemo, setPrefs, setReference, useDemoStore } from '../demoStore';
 import { prefOptions } from '../../data/demo';
 
 // “我的”页弹层集合（原型 preferences/reference/body/privacy/reset）。
-// 文案逐字取自原型；其中“原型/浏览器”等指称按 APP 语境改为“演示版/手机”，其余未改动。
+// 偏好自 M2 起持久化到本地数据库（可跳过、长期/当次分离）；
+// 文案逐字取自原型，其中“原型/浏览器”等指称按 APP 语境改为“演示版/手机”。
 
 export function PreferencesSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { prefs } = useDemoStore();
   const toast = useToast();
+  const [selected, setSelected] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (visible) {
+      void getPreferences().then(setSelected);
+    }
+  }, [visible]);
 
   return (
     <Sheet visible={visible} title="穿得像自己。" onClose={onClose}>
       <Text style={styles.description}>
-        这是长期偏好。今天想换个风格，可以在当次搭配中调整。
+        这是长期偏好。今天想换个风格，可以在当次搭配中调整。跳过也可以，随时回来设置。
       </Text>
       {prefOptions.map((option) => (
         <ChoiceRow
           key={option}
           label={option}
-          selected={prefs.includes(option)}
-          onPress={() => togglePref(option)}
+          selected={selected.includes(option)}
+          onPress={() =>
+            setSelected((prev) =>
+              prev.includes(option) ? prev.filter((p) => p !== option) : [...prev, option],
+            )
+          }
         />
       ))}
       <Button
         variant="primary"
-        label="完成"
-        onPress={() => {
+        label="保存偏好"
+        onPress={async () => {
+          await setPreferences(selected);
+          setPrefs(selected);
           onClose();
           toast('长期偏好已保存');
         }}
         style={styles.done}
+      />
+      <Button
+        variant="text"
+        label="暂不设置"
+        onPress={() => {
+          onClose();
+          toast('已跳过，随时可以回来设置');
+        }}
       />
     </Sheet>
   );

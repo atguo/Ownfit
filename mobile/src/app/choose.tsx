@@ -4,7 +4,7 @@ import { Page } from '../ui/Screen';
 import { BackTitle } from '../ui/PageTop';
 import { Pressable } from 'react-native';
 import { Button } from '../ui/components/Button';
-import { Notice } from '../ui/components/Basics';
+import { Notice, Tag } from '../ui/components/Basics';
 import { ItemArt } from '../ui/components/ItemArt';
 import { buildOutfit, setSelect, useDemoStore } from '../features/demoStore';
 import { colors, type } from '../ui/tokens';
@@ -35,6 +35,8 @@ export default function ChooseScreen() {
         </>
       }>
       <BackTitle title="从哪一件开始？" onBack={() => router.back()} />
+      <Tag icon="info" label="演示数据 · 真实衣橱在“衣橱”页" />
+      <View style={styles.tagGap} />
       <Text style={[type.titleXL, styles.title]}>今天，想穿这件。</Text>
       <Text style={styles.subtitle}>选中一件喜欢的，其他的交给搭配。</Text>
 
@@ -64,6 +66,9 @@ export default function ChooseScreen() {
 }
 
 const styles = StyleSheet.create({
+  tagGap: {
+    height: 13,
+  },
   title: {
     color: colors.ink,
   },

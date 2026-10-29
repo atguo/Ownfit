@@ -22,12 +22,21 @@ importers:
       expo-constants:
         specifier: ~58.0.13
         version: 58.0.13(expo@58.0.19)(react-native@0.88.0)(typescript@6.0.3)
+      expo-crypto:
+        specifier: ~58.0.7
+        version: 58.0.7(expo@58.0.19)
       expo-dev-client:
         specifier: ~58.0.15
         version: 58.0.15(expo@58.0.19)(react-native@0.88.0)
       expo-file-system:
         specifier: ~58.0.11
         version: 58.0.11(expo@58.0.19)(react-native@0.88.0)
+      expo-image-manipulator:
+        specifier: ~58.0.15
+        version: 58.0.15(expo@58.0.19)(react-native@0.88.0)(react@19.3.0)
+      expo-image-picker:
+        specifier: ~58.0.10
+        version: 58.0.10(expo@58.0.19)
       expo-linking:
         specifier: ~58.0.14
         version: 58.0.14(expo@58.0.19)(react-native@0.88.0)(react@19.3.0)(typescript@6.0.3)
@@ -37,6 +46,9 @@ importers:
       expo-secure-store:
         specifier: ~58.0.2
         version: 58.0.2(expo@58.0.19)
+      expo-sqlite:
+        specifier: ~58.0.14
+        version: 58.0.14(expo@58.0.19)(react-native@0.88.0)(react@19.3.0)
       expo-status-bar:
         specifier: ~58.0.4
         version: 58.0.4(expo@58.0.19)(react-native@0.88.0)(react@19.3.0)
@@ -2440,6 +2452,10 @@ packages:
     resolution: {integrity: sha512-BSHWgDSAiKs50o2Re8ppvp3seVHXSRM44cdSsT9FfNEUUZLOGWVCsiWaRPWM1Znn+mqZ1OfVZ3z3DWEzSp7hRA==}
     dev: false
 
+  /await-lock@2.2.2:
+    resolution: {integrity: sha512-aDczADvlvTGajTDjcjpJMqRkOF6Qdz3YbPZm/PyW6tKPkx2hlYBzxMhEywM/tU72HrVZjgl5VCdRuMlA7pZ8Gw==}
+    dev: false
+
   /babel-plugin-polyfill-corejs2@0.4.17(@babel/core@7.29.7):
     resolution: {integrity: sha512-aTyf30K/rqAsNwN76zYrdtx8obu0E4KoUME29B1xj+B3WxgvWkp943vYQ+z8Mv3lw9xHXMHpvSPOBxzAkIa94w==}
     peerDependencies:
@@ -3077,6 +3093,14 @@ packages:
       - typescript
     dev: false
 
+  /expo-crypto@58.0.7(expo@58.0.19):
+    resolution: {integrity: sha512-g+4i4UpqQ5jNy1VPRvVVvr9aIdh8WwvxbpwL2ntiSESDRsXyVSeb8JM6tHVdC3b9J2nGxjtrhrsaWOo0jbSxlA==}
+    peerDependencies:
+      expo: '*'
+    dependencies:
+      expo: 58.0.19(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.15)(expo-router@58.0.26)(react-dom@19.3.1)(react-native-worklets@0.13.0)(react-native@0.88.0)(react@19.3.0)(typescript@6.0.3)
+    dev: false
+
   /expo-dev-client@58.0.15(expo@58.0.19)(react-native@0.88.0):
     resolution: {integrity: sha512-Pdj4lOZiie160ZLeRhw6qgis7KZaXDQTXJrUx+VY+fjVco7AljP7V+Ufo9XmvUhE7xqBCpNxgaDQEe6ZnZMdHA==}
     peerDependencies:
@@ -3156,6 +3180,36 @@ packages:
       expo: 58.0.19(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.15)(expo-router@58.0.26)(react-dom@19.3.1)(react-native-worklets@0.13.0)(react-native@0.88.0)(react@19.3.0)(typescript@6.0.3)
       react: 19.3.0
       react-native: 0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0)(@types/react@19.3.0)(react@19.3.0)
+    dev: false
+
+  /expo-image-loader@58.0.3(expo@58.0.19):
+    resolution: {integrity: sha512-zlHudxC8OObyqCHmvdxJqURI7886KJ0cUJyn7R/a8FOD9fP837xKDN+u4SIt7XsSSVPNXzMd4Y7mN0pmup8NGA==}
+    peerDependencies:
+      expo: '*'
+    dependencies:
+      expo: 58.0.19(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.15)(expo-router@58.0.26)(react-dom@19.3.1)(react-native-worklets@0.13.0)(react-native@0.88.0)(react@19.3.0)(typescript@6.0.3)
+    dev: false
+
+  /expo-image-manipulator@58.0.15(expo@58.0.19)(react-native@0.88.0)(react@19.3.0):
+    resolution: {integrity: sha512-+DGAK+T3Q1W4AJnStC/tM+NufU4wK36Yw7XPyUUCrBkXpdlno7+t2mw+8apBH/WDkrkWSR0v0bwEWFaSAYQy0Q==}
+    peerDependencies:
+      expo: '*'
+      react: '*'
+      react-native: '*'
+    dependencies:
+      expo: 58.0.19(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.15)(expo-router@58.0.26)(react-dom@19.3.1)(react-native-worklets@0.13.0)(react-native@0.88.0)(react@19.3.0)(typescript@6.0.3)
+      expo-image-loader: 58.0.3(expo@58.0.19)
+      react: 19.3.0
+      react-native: 0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0)(@types/react@19.3.0)(react@19.3.0)
+    dev: false
+
+  /expo-image-picker@58.0.10(expo@58.0.19):
+    resolution: {integrity: sha512-yqQC9UYMWSUxk6U0jaS1vE1w+b9Ru0FJmQ3KjUf9Q9oVg5xBxmg8+Ts+usazMAuPoskNIXJ++VZ+uK6br9yUGQ==}
+    peerDependencies:
+      expo: '*'
+    dependencies:
+      expo: 58.0.19(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.15)(expo-router@58.0.26)(react-dom@19.3.1)(react-native-worklets@0.13.0)(react-native@0.88.0)(react@19.3.0)(typescript@6.0.3)
+      expo-image-loader: 58.0.3(expo@58.0.19)
     dev: false
 
   /expo-json-utils@58.0.1:
@@ -3342,6 +3396,19 @@ packages:
   /expo-server@58.0.6:
     resolution: {integrity: sha512-6DBlSZwxk3J0y1j2s4XebAWNiwGaMp32NcWX7b2kJC2+EFf1g+pCcVmx8ylawt2tyLmbDHswm4MHOfrd4bqfvA==}
     engines: {node: ^22.13.0 || ^24.3.0 || ^26.0.0 || >=27.0.0}
+    dev: false
+
+  /expo-sqlite@58.0.14(expo@58.0.19)(react-native@0.88.0)(react@19.3.0):
+    resolution: {integrity: sha512-OEZsNXYYOzWDkMORprUYRblJVfhO/TKloMWHm5bLzIhYMgs8UcdQZ/RFIMLQFciiaMoYZDsCZbveG47OKcDRXg==}
+    peerDependencies:
+      expo: '*'
+      react: '*'
+      react-native: '*'
+    dependencies:
+      await-lock: 2.2.2
+      expo: 58.0.19(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.15)(expo-router@58.0.26)(react-dom@19.3.1)(react-native-worklets@0.13.0)(react-native@0.88.0)(react@19.3.0)(typescript@6.0.3)
+      react: 19.3.0
+      react-native: 0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0)(@types/react@19.3.0)(react@19.3.0)
     dev: false
 
   /expo-status-bar@58.0.4(expo@58.0.19)(react-native@0.88.0)(react@19.3.0):
