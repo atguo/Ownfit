@@ -1,32 +1,63 @@
-import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Page } from '../../ui/Screen';
 import { PageTop } from '../../ui/PageTop';
 import { Button } from '../../ui/components/Button';
 import { EmptyState, Tag } from '../../ui/components/Basics';
-import { OutfitBoard } from '../../ui/components/OutfitBoard';
 import { FeedbackSheet } from '../../features/sheets/FeedbackSheet';
-import { reuseOutfit, useDemoStore } from '../../features/demoStore';
+import { loadOutfitFrom } from '../../features/outfitSession';
+import { listPlans, type SavedPlan } from '../../data/repositories/planRepository';
+import { getItem } from '../../data/repositories/itemRepository';
+import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
+import { slotForCategory } from '../../features/outfitSession';
 import { colors, radius, type } from '../../ui/tokens';
 
 const filters = ['全部', '穿过', '穿过且满意'] as const;
 
-// 搭配（原型 saved()）：筛选 + 收藏卡列表 + 空态。
-// 收藏 / 穿过 / 满意分别记录，未反馈不视为满意（AGENTS 第 4 节规则 11）。
+// 搭配（M3 真实版）：保存的方案列表 + 穿着筛选 + 感受记录入口。
+// 收藏 / 穿过 / 满意分别记录，未反馈不视为满意（AGENTS §4 规则 11）。
 export default function OutfitsScreen() {
   const router = useRouter();
-  const { saved } = useDemoStore();
+  const [plans, setPlans] = useState<SavedPlan[]>([]);
   const [filter, setFilter] = useState<(typeof filters)[number]>('全部');
   const [feedbackId, setFeedbackId] = useState<string | null>(null);
 
-  const list = saved.filter((s) =>
+  useFocusEffect(
+    useCallback(() => {
+      void (async () => setPlans(await listPlans()))();
+    }, []),
+  );
+
+  const list = plans.filter((p) =>
     filter === '全部'
       ? true
       : filter === '穿过且满意'
-        ? s.worn && s.satisfied
-        : s.worn,
+        ? p.wornState === 'yes'
+        : filter === '穿过'
+          ? p.wornState !== 'unworn'
+          : true,
   );
+
+  async function reuse(plan: SavedPlan) {
+    // 槽位按单品品类推导（与 startOutfitFrom 的规则一致）
+    const slots: Partial<Record<'top' | 'dress' | 'bottom' | 'shoes', string>> = {};
+    for (const item of plan.items) {
+      const wardrobeItem = await getItem(item.itemId);
+      if (!wardrobeItem?.category) continue;
+      const slot = slotForCategory(wardrobeItem.category);
+      if (slot && !slots[slot]) slots[slot] = item.itemId;
+    }
+    loadOutfitFrom({
+      planId: plan.id,
+      name: plan.name,
+      basisId: plan.basisItemId,
+      slots,
+      wear: plan.wear.style,
+      itemIds: plan.items.map((i) => i.itemId),
+    });
+    router.push('/outfit');
+  }
 
   return (
     <Page>
@@ -39,34 +70,42 @@ export default function OutfitsScreen() {
       </View>
 
       {list.length > 0 ? (
-        list.map((s) => (
-          <View key={s.id} style={styles.card}>
-            <OutfitBoard topId={s.top} small />
+        list.map((plan) => (
+          <View key={plan.id} style={styles.card}>
+            <View style={styles.thumbRow}>
+              {plan.items.slice(0, 4).map((item) => (
+                <PlanThumb key={item.itemId} itemId={item.itemId} />
+              ))}
+            </View>
             <View style={styles.cardContent}>
               <Tag
                 label={
-                  s.worn ? (s.satisfied ? '穿过且满意' : '已穿过 · 未确认满意') : '已收藏 · 尚未穿过'
+                  plan.wornState === 'yes'
+                    ? '穿过且满意'
+                    : plan.wornState === 'no'
+                      ? '已穿过 · 未确认满意'
+                      : plan.wornState === 'unknown'
+                        ? '已穿过 · 未确认满意'
+                        : '已收藏 · 尚未穿过'
                 }
               />
-              <Text style={styles.cardName}>{s.name}</Text>
+              <Text style={styles.cardName} numberOfLines={1}>
+                {plan.name ?? '我的搭配'}
+              </Text>
               <Text style={styles.cardMeta}>
-                {s.scene} · {s.wear} · {s.ids.length} 件单品
+                {plan.scene.scene || '未设场景'} · {plan.wear.style} · {plan.items.length} 件单品
               </Text>
               <View style={styles.cardActions}>
                 <Button
                   variant="secondary"
                   label="再穿这套"
-                  onPress={() => {
-                    if (reuseOutfit(s.id)) {
-                      router.push('/outfit');
-                    }
-                  }}
+                  onPress={() => void reuse(plan)}
                   style={styles.cardButton}
                 />
                 <Button
                   variant="secondary"
-                  label={s.worn ? '补充感受' : '今天穿了'}
-                  onPress={() => setFeedbackId(s.id)}
+                  label={plan.wornState === 'unworn' ? '今天穿了' : '补充感受'}
+                  onPress={() => setFeedbackId(plan.id)}
                   style={styles.cardButton}
                 />
               </View>
@@ -88,8 +127,22 @@ export default function OutfitsScreen() {
         </EmptyState>
       )}
 
-      <FeedbackSheet outfitId={feedbackId} onClose={() => setFeedbackId(null)} />
+      <FeedbackSheet planId={feedbackId} onClose={() => setFeedbackId(null)} />
     </Page>
+  );
+}
+
+function PlanThumb({ itemId }: { itemId: string }) {
+  const [uri, setUri] = useState<string | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      getMainPhotoPaths(itemId).then((paths) => setUri(paths ? photoUri(paths.thumbPath) : null));
+    }, [itemId]),
+  );
+  return uri ? (
+    <Image source={{ uri }} style={styles.thumb} resizeMode="cover" />
+  ) : (
+    <View style={[styles.thumb, styles.thumbPlaceholder]} />
   );
 }
 
@@ -106,6 +159,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     marginVertical: 15,
+  },
+  thumbRow: {
+    flexDirection: 'row',
+    gap: 2,
+    backgroundColor: colors.boardBg,
+  },
+  thumb: {
+    flex: 1,
+    aspectRatio: 1,
+    backgroundColor: colors.artBg,
+  },
+  thumbPlaceholder: {
+    backgroundColor: colors.line,
   },
   cardContent: {
     padding: 15,

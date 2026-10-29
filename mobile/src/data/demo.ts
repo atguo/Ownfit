@@ -1,7 +1,7 @@
 // M1 演示数据：与原型 app.js 的 defaults() 一致的内存常量，仅用于 M1 界面实现与视觉对照。
 // 不持久化、不代表真实资料；M2 接入本地数据库后整体替换（AGENTS.md 第 4 节规则 5：演示数据隔离）。
 
-export type ItemCategory = '上衣' | '下装' | '鞋履' | '配饰';
+export type ItemCategory = '上衣' | '下装' | '连衣裙' | '外套' | '鞋履' | '包' | '配饰';
 
 export interface DemoItem {
   id: string;
@@ -23,7 +23,7 @@ export const demoItems: DemoItem[] = [
   { id: 'bag', name: '巧克力肩包', cat: '配饰', color: '巧克力色', x: 100, y: 100 },
 ];
 
-export const categories: ItemCategory[] = ['上衣', '下装', '鞋履', '配饰'];
+export const categories: ItemCategory[] = ['上衣', '下装', '连衣裙', '外套', '鞋履', '包', '配饰'];
 
 export const sceneOptions = ['日常通勤', '周末散步', '朋友见面', '全天户外'] as const;
 export const dayOptions = ['今天', '明天'] as const;

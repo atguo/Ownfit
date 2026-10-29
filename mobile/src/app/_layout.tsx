@@ -12,13 +12,12 @@ export default function RootLayout() {
       <ToastProvider>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="choose" />
-        <Stack.Screen name="outfit" />
-        <Stack.Screen name="preview" />
-        <Stack.Screen name="add" />
-        <Stack.Screen name="ai/config" />
-        <Stack.Screen name="ai/config-edit" />
-        <Stack.Screen name="dev/components" />
+          <Stack.Screen name="choose" />
+          <Stack.Screen name="outfit" />
+          <Stack.Screen name="add" />
+          <Stack.Screen name="ai/config" />
+          <Stack.Screen name="ai/config-edit" />
+          <Stack.Screen name="dev/components" />
         </Stack>
       </ToastProvider>
     </SafeAreaProvider>

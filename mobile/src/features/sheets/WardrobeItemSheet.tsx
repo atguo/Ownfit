@@ -5,9 +5,18 @@ import { useEffect, useState } from 'react';
 import { Alert, Image, StyleSheet, Text, View } from 'react-native';
 import { Sheet } from '../../ui/components/Sheet';
 import { Button } from '../../ui/components/Button';
-import { DetailCell } from './DetailSheet';
 import { Field, TextField } from '../../ui/components/Field';
 import { useToast } from '../../ui/components/Toast';
+
+/** 详情两列键值格（原 DemoSheet 的 DetailCell，随 M3 迁入） */
+function DetailCell({ label, value }: { label: string; value: string }) {
+  return (
+    <View>
+      <Text style={styles.cellLabel}>{label}</Text>
+      <Text style={styles.cellValue}>{value}</Text>
+    </View>
+  );
+}
 import {
   archiveItem,
   confirmItem,
@@ -29,11 +38,14 @@ export function WardrobeItemSheet({
   detail,
   onClose,
   onChanged,
+  onUse,
 }: {
   detail: WardrobeItemDetail | null;
   onClose: () => void;
   /** 条目发生变化（入库/编辑/归档/删除）后回调，列表刷新 */
   onChanged: () => void;
+  /** 已入库单品：围绕这件搭配（进入搭配会话） */
+  onUse: (id: string) => void;
 }) {
   const toast = useToast();
   const item = detail?.item;
@@ -150,7 +162,10 @@ export function WardrobeItemSheet({
           {isDraft ? (
             <Button variant="primary" label="确认入库" onPress={confirmDraft} />
           ) : (
-            <Button variant="primary" label="保存修改" onPress={saveBasics} />
+            <>
+              <Button variant="primary" label="围绕这件搭配" onPress={() => item && onUse(item.id)} />
+              <Button variant="secondary" label="保存修改" onPress={saveBasics} style={styles.gap} />
+            </>
           )}
 
           {isDraft ? null : isArchived ? (
@@ -166,6 +181,17 @@ export function WardrobeItemSheet({
 }
 
 const styles = StyleSheet.create({
+  cellLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 5,
+  },
+  cellValue: {
+    color: colors.ink,
+    fontSize: 12,
+    lineHeight: 18,
+  },
   photo: {
     width: 150,
     height: 150,

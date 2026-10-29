@@ -1,16 +1,28 @@
-import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Page } from '../../ui/Screen';
 import { PageTop } from '../../ui/PageTop';
 import { Button } from '../../ui/components/Button';
 import { Icon } from '../../ui/Icon';
-import { ItemArt, LookArt } from '../../ui/components/ItemArt';
+import { LookArt } from '../../ui/components/ItemArt';
 import { Tag } from '../../ui/components/Basics';
 import { SceneSheet } from '../../features/sheets/SceneSheet';
 import { setContext, useDemoStore } from '../../features/demoStore';
 import { getSceneDefault } from '../../data/repositories/settingsRepository';
+import {
+  getItem,
+  getMainThumb,
+  listItemIdsByStatus,
+} from '../../data/repositories/itemRepository';
+import { photoUri } from '../../data/repositories/photoRepository';
 import { colors, radius, type } from '../../ui/tokens';
+
+interface RecentItem {
+  id: string;
+  label: string;
+  thumbUri: string | null;
+}
 
 const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -19,6 +31,7 @@ export default function TodayScreen() {
   const router = useRouter();
   const { newUser, context } = useDemoStore();
   const [sceneOpen, setSceneOpen] = useState(false);
+  const [recent, setRecent] = useState<RecentItem[]>([]);
   const now = new Date();
   const dateLine = `${now.getMonth() + 1}月${now.getDate()}日，星期${weekdays[now.getDay()]}`;
 
@@ -28,6 +41,32 @@ export default function TodayScreen() {
       if (saved) setContext(saved);
     });
   }, []);
+
+  // 最近入库的真实单品（最多 3 件；从加密库读取）
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void (async () => {
+        const ids = (await listItemIdsByStatus('active')).slice(0, 3);
+        const views: RecentItem[] = [];
+        for (const id of ids) {
+          const item = await getItem(id);
+          const thumb = await getMainThumb(id);
+          if (item) {
+            views.push({
+              id,
+              label: item.name ?? item.category ?? '未命名',
+              thumbUri: thumb ? photoUri(thumb) : null,
+            });
+          }
+        }
+        if (active) setRecent(views);
+      })();
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   return (
     <Page>
@@ -104,13 +143,22 @@ export default function TodayScreen() {
         <Button variant="text" label="查看衣橱" onPress={() => router.push('/wardrobe')} />
       </View>
       <View style={styles.miniGrid}>
-        {['knit', 'pants', 'bag'].map((id) => (
-          <View key={id} style={styles.miniCell}>
-            <ItemArt x={miniPos[id][0]} y={miniPos[id][1]} radius={13} />
+        {recent.map((item) => (
+          <Pressable
+            key={item.id}
+            accessibilityRole="button"
+            accessibilityLabel={item.label}
+            onPress={() => router.push('/wardrobe')}
+            style={styles.miniCell}>
+            {item.thumbUri ? (
+              <Image source={{ uri: item.thumbUri }} style={styles.miniArt} resizeMode="cover" />
+            ) : (
+              <View style={[styles.miniArt, styles.miniPlaceholder]} />
+            )}
             <Text style={styles.miniName} numberOfLines={1}>
-              {miniName[id]}
+              {item.label}
             </Text>
-          </View>
+          </Pressable>
         ))}
       </View>
       <View style={styles.sectionHead}>
@@ -122,18 +170,6 @@ export default function TodayScreen() {
     </Page>
   );
 }
-
-// 雪碧图列/行偏移与名称（与 data/demo 一致）
-const miniPos: Record<string, [number, number]> = {
-  knit: [0, 0],
-  pants: [50, 0],
-  bag: [100, 100],
-};
-const miniName: Record<string, string> = {
-  knit: '奶油白针织衫',
-  pants: '炭灰色阔腿裤',
-  bag: '巧克力肩包',
-};
 
 const styles = StyleSheet.create({
   pressed: {
@@ -260,6 +296,15 @@ const styles = StyleSheet.create({
   },
   miniCell: {
     flex: 1,
+  },
+  miniArt: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 13,
+    backgroundColor: colors.artBg,
+  },
+  miniPlaceholder: {
+    backgroundColor: colors.line,
   },
   miniName: {
     fontSize: 10,
