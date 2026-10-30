@@ -80,6 +80,13 @@ export default function ProfileScreen() {
         value="M1 组件与状态一览"
         onPress={() => router.push('/dev/components')}
       />
+      {/* M4 开发入口：数据一致性工具 */}
+      <SettingRow
+        icon="grid"
+        title="数据工具（开发）"
+        value="一致性扫描与清理"
+        onPress={() => router.push('/dev/data-tools')}
+      />
 
       <Text style={styles.subtleInfo}>
         {'照片与资料保存在本机；只有做衣物分析时，才会把这一件的照片发送到你手动配置的模型服务。\n不接入账号，也不建设云端资料库。'}
