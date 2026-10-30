@@ -135,8 +135,8 @@ const taskInput = (overrides = {}) => ({
   configId: 'cfg-1',
   configSnapshot: '{"id":"cfg-1","name":"GLM","urlKind":"openai","baseUrl":"https://x","modelId":"m"}',
   configRevision: 'legacy',
-  contractVersion: '1.0.0-draft',
-  promptVersion: '1',
+  contractVersion: '2.0.0-draft',
+  promptVersion: '3',
   ...overrides,
 });
 

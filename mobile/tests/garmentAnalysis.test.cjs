@@ -91,10 +91,10 @@ function createFakeFetch(handler) {
   return fake;
 }
 
-const okResponse = (content) => ({
+const okResponse = (content, finishReason = null) => ({
   ok: true,
   status: 200,
-  json: async () => ({ choices: [{ message: { content } }] }),
+  json: async () => ({ choices: [{ message: { content }, finish_reason: finishReason }] }),
   text: async () => content,
 });
 
@@ -212,17 +212,17 @@ function seedConfigFileRaw(fileSystem, raw) {
   fileSystem.files.set(CONFIG_FILE_PATH, raw);
 }
 
+/** 2.0.0-draft 契约形状：动态属性清单 + hex 颜色 */
 const validPayload = {
   targetStatus: 'single',
-  suggestedName: { state: 'known', value: '白色衬衫' },
-  category: { state: 'known', value: '上衣' },
-  colors: { state: 'known', value: [{ name: '白色', isPrimary: true }] },
-  pattern: { state: 'known', value: '纯色' },
-  neckline: { state: 'unknown', value: null },
-  sleeve: { state: 'known', value: '长袖' },
-  fit: { state: 'not_applicable', value: null },
-  stylingTags: { state: 'known', value: ['通勤'] },
-  description: { state: 'known', value: '一件白色长袖衬衫。' },
+  category: '上衣',
+  suggestedName: '白色长袖衬衫',
+  colors: [{ name: '白色', hex: '#F5F5F0', isPrimary: true }],
+  attributes: [
+    { name: '领型', value: '翻领' },
+    { name: '袖型', value: '长袖' },
+    { name: '图案', value: '纯色' },
+  ],
   unclearParts: [],
 };
 
@@ -361,7 +361,7 @@ test('callRevision：新增生成版本；改地址/模型/能力/密钥会更�
 // 分析客户端（R3）
 // ---------------------------------------------------------------------------
 
-test('分析请求：只有一件照片、参数为 2048、用 data URL 而不是 file URI', async () => {
+test('分析请求：只有一件照片、参数为 40960、用 data URL 而不是 file URI', async () => {
   const { ai, fetch } = await setup({ handler: () => okResponse(JSON.stringify(validPayload)) });
   const result = await ai('garmentAnalysis').runGarmentAnalysis(runInput());
   assert.equal(result.ok, true);
@@ -369,7 +369,7 @@ test('分析请求：只有一件照片、参数为 2048、用 data URL 而不�
   assert.equal(fetch.calls.length, 1);
   const { url, body, init } = fetch.calls[0];
   assert.equal(url, 'https://api.example.com/v1/chat/completions');
-  assert.equal(body.max_tokens, 2048);
+  assert.equal(body.max_tokens, 40960);
   const serialized = JSON.stringify(body);
   assert.equal(serialized.includes('file://'), false, '不得发送本地 file URI');
   const imageBlocks = (body.messages ?? [])
@@ -389,8 +389,18 @@ test('连接测试仍使用 16 个 token（与分析的 2048 区分）', async (
   );
   assert.equal(chat.ok, true);
   assert.equal(fetch.calls[0].body.max_tokens, 16);
-  assert.equal(ai('garmentAnalysis').ANALYSIS_MAX_TOKENS, 2048);
+  assert.equal(ai('garmentAnalysis').ANALYSIS_MAX_TOKENS, 40960);
   assert.equal(ai('garmentAnalysis').ANALYSIS_TIMEOUT_MS, 90000);
+});
+
+test('截断输出：finish_reason=length 时失败原因明确指向截断，不冒充格式错误', async () => {
+  const truncatedJson = '{"targetStatus":"single","category":"上衣"';
+  const truncated = await setup({ handler: () => okResponse(truncatedJson, 'length') });
+  const result = await truncated.ai('garmentAnalysis').runGarmentAnalysis(runInput());
+  assert.equal(result.ok, false);
+  assert.equal(result.error.kind, 'invalid_output');
+  assert.equal(result.error.message.includes('截断'), true);
+  assert.equal(result.error.message.includes('40960'), true);
 });
 
 test('解析：整段 JSON 与单层 ```json 围栏都可接受', async () => {
@@ -401,6 +411,34 @@ test('解析：整段 JSON 与单层 ```json 围栏都可接受', async () => {
     handler: () => okResponse('```json\n' + JSON.stringify(validPayload) + '\n```'),
   });
   assert.equal((await fenced.ai('garmentAnalysis').runGarmentAnalysis(runInput())).ok, true);
+});
+
+test('解析：剥 think 思考段、围栏前后带说明文字可接受；多代码块/坏围栏拒绝并带内容摘要', async () => {
+  const think = await setup({
+    handler: () => okResponse('<think>用户想分析衣服。</think>\n' + JSON.stringify(validPayload)),
+  });
+  assert.equal((await think.ai('garmentAnalysis').runGarmentAnalysis(runInput())).ok, true);
+
+  const proseFence = await setup({
+    handler: () =>
+      okResponse('好的，以下是分析结果：\n```json\n' + JSON.stringify(validPayload) + '\n```\n希望有帮助。'),
+  });
+  assert.equal((await proseFence.ai('garmentAnalysis').runGarmentAnalysis(runInput())).ok, true);
+
+  const multi = await setup({
+    handler: () => okResponse('```json\n{}\n``` 中间说明 ```json\n{}\n```'),
+  });
+  const multiResult = await multi.ai('garmentAnalysis').runGarmentAnalysis(runInput());
+  assert.equal(multiResult.ok, false);
+  assert.equal(multiResult.error.kind, 'invalid_output');
+  assert.equal(multiResult.error.message.includes('2 个代码块'), true);
+
+  const proseNoFence = await setup({
+    handler: () => okResponse('这是结果：\n' + JSON.stringify(validPayload)),
+  });
+  const proseResult = await proseNoFence.ai('garmentAnalysis').runGarmentAnalysis(runInput());
+  assert.equal(proseResult.ok, false, '围栏都没有时仍拒绝（不截取花括号修复）');
+  assert.equal(proseResult.error.message.includes('这是结果'), true, '失败摘要含内容开头便于设备上诊断');
 });
 
 test('解析：带解释文字、截断、非法契约都按 invalid_output 处理，不猜测修复', async () => {
@@ -415,19 +453,56 @@ test('解析：带解释文字、截断、非法契约都按 invalid_output 处�
   assert.equal((await truncated.ai('garmentAnalysis').runGarmentAnalysis(runInput())).error.kind, 'invalid_output');
 
   const badEnum = await setup({
-    handler: () => okResponse(JSON.stringify({ ...validPayload, category: { state: 'known', value: '帽子' } })),
+    handler: () => okResponse(JSON.stringify({ ...validPayload, category: '帽子' })),
   });
   assert.equal((await badEnum.ai('garmentAnalysis').runGarmentAnalysis(runInput())).error.kind, 'invalid_output');
+
+  const badColor = await setup({
+    handler: () => okResponse(JSON.stringify({ ...validPayload, colors: [{ name: '白', hex: 'white', isPrimary: true }] })),
+  });
+  assert.equal((await badColor.ai('garmentAnalysis').runGarmentAnalysis(runInput())).error.kind, 'invalid_output');
 });
 
 test('适配：供应商返回“鞋”时显式映射为契约的“鞋履”', async () => {
   const { ai } = await setup({
-    handler: () =>
-      okResponse(JSON.stringify({ ...validPayload, category: { state: 'known', value: '鞋' } })),
+    handler: () => okResponse(JSON.stringify({ ...validPayload, category: '鞋' })),
   });
   const result = await ai('garmentAnalysis').runGarmentAnalysis(runInput());
   assert.equal(result.ok, true);
-  assert.deepEqual(plain(result.result.category), { state: 'known', value: '鞋履' });
+  assert.equal(result.result.category, '鞋履');
+});
+
+test('适配：英文属性名映射为中文，同名去重保留最后一条', async () => {
+  const { ai } = await setup({
+    handler: () =>
+      okResponse(
+        JSON.stringify({
+          ...validPayload,
+          attributes: [
+            { name: 'pattern', value: '纯色' },
+            { name: 'Neckline', value: '翻领' },
+            { name: '领型', value: '圆领' },
+          ],
+        }),
+      ),
+  });
+  const result = await ai('garmentAnalysis').runGarmentAnalysis(runInput());
+  assert.equal(result.ok, true);
+  assert.deepEqual(plain(result.result.attributes), [
+    { name: '图案', value: '纯色' },
+    { name: '领型', value: '圆领' },
+  ]);
+});
+
+test('提示词：要求属性名用简体中文，并附品类推荐属性', async () => {
+  const { ai, fetch } = await setup({ handler: () => okResponse(JSON.stringify(validPayload)) });
+  await ai('garmentAnalysis').runGarmentAnalysis(runInput({ categoryHint: '上衣' }));
+  const system = fetch.calls[0].body.messages.find((m) => m.role === 'system');
+  assert.equal(system.content.includes('属性名必须用简体中文'), true);
+  assert.equal(system.content.includes('禁止使用英文单词'), true);
+  const user = fetch.calls[0].body.messages.find((m) => m.role === 'user');
+  const userText = user.content.find((part) => part.type === 'text').text;
+  assert.equal(userText.includes('领型'), true, '用户消息附推荐属性名引导');
 });
 
 test('空内容：HTTP 200 但无内容按分析失败处理（连接测试仍算可达）', async () => {
