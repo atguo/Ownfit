@@ -84,8 +84,17 @@ function createLoader(adapter, fsStub, fetchImpl) {
         manipulate: () => ({
           resize: () => ({
             renderAsync: async () => ({
-              saveAsync: async () => ({ uri: 'file:///cache/out.jpg' }),
+              saveAsync: async () => {
+                fsStub.files.set('file:///cache/out.jpg', 'rendered-bytes');
+                return { uri: 'file:///cache/out.jpg' };
+              },
             }),
+          }),
+          renderAsync: async () => ({
+            saveAsync: async () => {
+              fsStub.files.set('file:///cache/out.jpg', 'rendered-bytes');
+              return { uri: 'file:///cache/out.jpg' };
+            },
           }),
         }),
       },
@@ -140,6 +149,7 @@ async function setup() {
   });
   const load = createLoader(adapter, fsStub, fetchImpl);
   const preview = load(path.join(SRC, 'data/repositories/previewRepository.ts'));
+  const settings = load(path.join(SRC, 'data/repositories/settingsRepository.ts'));
   const runnerModule = load(path.join(SRC, 'services/ai/previewTaskRunner.ts'));
   const config = {
     id: 'cfg-img',
@@ -155,7 +165,12 @@ async function setup() {
     createdAt: 't',
     updatedAt: 't',
   };
-  return { db, adapter, close, fsStub, load, preview, runnerModule, config };
+  return { db, adapter, close, fsStub, load, preview, settings, runnerModule, config };
+}
+
+/** vm 上下文对象转普通对象，便于 deepEqual */
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function baseCreateInput(over = {}) {
@@ -175,6 +190,91 @@ function baseCreateInput(over = {}) {
 function configSnapshotValue() {
   return { id: 'cfg-img', name: 'MiniMax 图像', urlKind: 'minimax', baseUrl: 'https://api.example.com', modelId: 'image-01' };
 }
+
+test('人物参考：保存后可读回（含版本），移除后文件与记录一并清除', async () => {
+  const ctx = await setup();
+  try {
+    // preferences 表有 NOT NULL 的 source/created_at/updated_at —— 插入必须带全列
+    const saved = await ctx.preview.savePreviewReference({
+      sourceUri: 'file:///cache/in.jpg',
+      sourceWidth: 800,
+      sourceHeight: 600,
+    });
+    assert.equal(saved.path, 'preview-ref/reference.jpg');
+    assert.ok(saved.updatedAt, '参考版本时间写入记录');
+
+    const read = await ctx.preview.getPreviewReference();
+    assert.equal(read.path, 'preview-ref/reference.jpg');
+    assert.equal(read.updatedAt, saved.updatedAt);
+    assert.equal(
+      ctx.db.prepare("SELECT COUNT(*) AS n FROM preferences WHERE id = 'preview-reference'").get().n,
+      1,
+      '记录已落库',
+    );
+
+    await ctx.preview.removePreviewReference();
+    assert.equal(await ctx.preview.getPreviewReference(), null);
+    assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM preferences WHERE id = 'preview-reference'").get().n, 0);
+  } finally {
+    ctx.close();
+  }
+});
+
+test('人物参考自愈：文件在但记录缺失时自动重建记录，不要求用户重选', async () => {
+  const ctx = await setup();
+  try {
+    // 模拟"文件已落盘、记录写入失败"（曾发生的真实故障）
+    ctx.fsStub.files.set('file:///document/preview-ref/reference.jpg', 'jpeg-bytes');
+    assert.equal(
+      ctx.db.prepare("SELECT COUNT(*) AS n FROM preferences WHERE id = 'preview-reference'").get().n,
+      0,
+      '前置：记录不存在',
+    );
+
+    const recovered = await ctx.preview.getPreviewReference();
+    assert.ok(recovered, '应从存在的文件恢复出参考');
+    assert.equal(recovered.path, 'preview-ref/reference.jpg');
+    assert.equal(
+      ctx.db.prepare("SELECT COUNT(*) AS n FROM preferences WHERE id = 'preview-reference'").get().n,
+      1,
+      '记录已重建',
+    );
+
+    // 文件也没有时不得凭空造参考
+    ctx.fsStub.files.delete('file:///document/preview-ref/reference.jpg');
+    await ctx.preview.removePreviewReference();
+    assert.equal(await ctx.preview.getPreviewReference(), null);
+  } finally {
+    ctx.close();
+  }
+});
+
+test('preferences 共享表：偏好项与颜色库/人物参考互不干扰（读取与删除都不越界）', async () => {
+  const ctx = await setup();
+  try {
+    // 先写入人物参考（占用 preferences 表一行）
+    ctx.fsStub.files.set('file:///document/preview-ref/reference.jpg', 'jpeg-bytes');
+    await ctx.preview.getPreviewReference();
+    assert.equal(
+      ctx.db.prepare("SELECT COUNT(*) AS n FROM preferences WHERE id = 'preview-reference'").get().n,
+      1,
+    );
+
+    // 设置偏好：不得删除人物参考记录
+    await ctx.settings.setPreferences(['简约日常']);
+    assert.deepEqual(plain(await ctx.settings.getPreferences()), ['简约日常']);
+    assert.equal(
+      ctx.db.prepare("SELECT COUNT(*) AS n FROM preferences WHERE id = 'preview-reference'").get().n,
+      1,
+      '设置偏好不得清掉其他用途的记录',
+    );
+
+    // 人物参考仍可读
+    assert.ok(await ctx.preview.getPreviewReference());
+  } finally {
+    ctx.close();
+  }
+});
 
 test('入队：requestKey 幂等；相同输入且有活动任务时去重；输入指纹含单品与参考版本', async () => {
   const ctx = await setup();

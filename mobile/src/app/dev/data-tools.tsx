@@ -5,12 +5,14 @@
 import { useCallback, useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { File, Paths } from 'expo-file-system';
 import { Page } from '../../ui/Screen';
 import { BackTitle } from '../../ui/PageTop';
 import { Button } from '../../ui/components/Button';
 import { useToast } from '../../ui/components/Toast';
 import {
   cleanOrphanFiles,
+  exportWardrobeProfiles,
   getFreeDiskBytes,
   MIN_FREE_BYTES_FOR_PHOTO,
   rebuildMissingThumbnails,
@@ -89,6 +91,18 @@ export default function DataToolsScreen() {
     })();
   }
 
+  async function exportProfiles() {
+    try {
+      const profile = await exportWardrobeProfiles();
+      const file = new File(Paths.document, 'wardrobe-profile.json');
+      if (file.exists) file.delete();
+      file.write(JSON.stringify(profile, null, 2));
+      toast(`已导出 ${profile.items.length} 件衣物的档案（documents/wardrobe-profile.json）`);
+    } catch (error) {
+      toast(`导出失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   const hasIssues =
     report != null &&
     (report.missingFiles.length > 0 ||
@@ -164,6 +178,12 @@ export default function DataToolsScreen() {
           ) : null}
         </View>
       ) : null}
+
+      <Text style={styles.sectionTitle}>衣物档案导出</Text>
+      <Text style={styles.note}>
+        导出结构化档案 JSON（名称、品类、动态属性、颜色、测量），不含照片。用于搭配推荐实验与调试。
+      </Text>
+      <Button variant="secondary" label="导出档案 JSON" onPress={() => void exportProfiles()} />
     </Page>
   );
 }
