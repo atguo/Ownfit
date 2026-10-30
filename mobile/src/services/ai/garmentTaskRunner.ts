@@ -109,6 +109,8 @@ export interface GarmentTaskRunnerDeps {
   commitGarmentAnalysis(taskId: string, result: GarmentAnalysis): Promise<AnalysisCommitResult>;
   /** 数据库状态可能变化的通知（归档/删除/重试等）；只用于尽力中止与刷新，提交安全性不依赖它 */
   subscribeChanges?(listener: () => void): () => void;
+  /** 任务状态落库后的通知（领取/完成/失败/中断等）；页面据此刷新展示，不承担提交安全性 */
+  onTaskSettled?(): void;
 }
 
 export interface EnqueueGarmentAnalysisInput {
@@ -181,20 +183,24 @@ export function createGarmentTaskRunner(deps: GarmentTaskRunnerDeps): GarmentTas
       const item = await deps.getItem(task.itemId);
       if (!item || item.status === 'deleted') {
         await deps.updateTaskStatus(task.id, ['queued'], 'cancelled', { finishedAt: new Date().toISOString() });
+        deps.onTaskSettled?.();
         continue;
       }
       if (item.status === 'archived') {
         await deps.updateTaskStatus(task.id, ['queued'], 'cancelled', { finishedAt: new Date().toISOString() });
+        deps.onTaskSettled?.();
         continue;
       }
       // 发送前发现资料或照片变化：stale，零网络请求
       if (item.revision !== task.inputRevision || item.mainPhotoId !== task.photoId) {
         await deps.updateTaskStatus(task.id, ['queued'], 'stale', { finishedAt: new Date().toISOString() });
+        deps.onTaskSettled?.();
         continue;
       }
       const photo = await deps.getMainPhotoForAnalysis(task.itemId);
       if (!photo || photo.photoId !== task.photoId) {
         await deps.updateTaskStatus(task.id, ['queued'], 'stale', { finishedAt: new Date().toISOString() });
+        deps.onTaskSettled?.();
         continue;
       }
       // 配置版本检查：已删除或被改过 → blocked，不把请求改发到新地址
@@ -205,16 +211,42 @@ export function createGarmentTaskRunner(deps: GarmentTaskRunnerDeps): GarmentTas
           errorKind: 'config_changed',
           errorSummary: '所选模型配置已被修改或删除，请重新选择后再分析',
         });
+        deps.onTaskSettled?.();
         continue;
       }
       // 发送前先把状态写成 running
-      if (!(await deps.markTaskRunning(task.id))) continue;
-      return { ...task, status: 'running' };
+      if (await deps.markTaskRunning(task.id)) {
+        deps.onTaskSettled?.();
+        return { ...task, status: 'running' };
+      }
     }
     return null;
   }
 
   async function execute(task: AnalysisTask): Promise<void> {
+    // 兜底：任何路径都以“状态落库 + 通知”结束，绝不让任务停留在 running。
+    // 发送前意外失败 → failed（未发起请求，无计费风险）；发送后 → interrupted（结果未知）。
+    let sent = false;
+    try {
+      await runClaimed(task, () => {
+        sent = true;
+      });
+    } catch (error) {
+      try {
+        await deps.updateTaskStatus(task.id, ['running'], sent ? 'interrupted' : 'failed', {
+          finishedAt: new Date().toISOString(),
+          errorKind: 'internal',
+          errorSummary: `处理意外失败：${error instanceof Error ? error.message : String(error)}`,
+        });
+      } catch {
+        // 兜底写状态也失败：留给下次启动 recover() 处理遗留 running
+      }
+    }
+    deps.onTaskSettled?.();
+  }
+
+  /** 执行一个已领取（running）的任务：读取输入 → 调用模型 → 落库终态 */
+  async function runClaimed(task: AnalysisTask, markSent: () => void): Promise<void> {
     const config = deps.getConfig(task.configId);
     if (!config) return; // 已被删除：交由状态检查处理
 
@@ -248,6 +280,7 @@ export function createGarmentTaskRunner(deps: GarmentTaskRunnerDeps): GarmentTas
 
     const controller = new AbortController();
     inflight.set(task.id, controller);
+    markSent();
     let outcome: AnalysisRunResult;
     try {
       outcome = await deps.runGarmentAnalysis({
@@ -287,7 +320,9 @@ export function createGarmentTaskRunner(deps: GarmentTaskRunnerDeps): GarmentTas
     if (loopRunning) return;
     loopRunning = true;
     try {
+      const hadPending = pendingCommits.size > 0;
       await retryPendingCommits();
+      if (hadPending) deps.onTaskSettled?.();
       while (foreground) {
         const task = await claimNext();
         if (!task) break;
@@ -345,11 +380,12 @@ export function createGarmentTaskRunner(deps: GarmentTaskRunnerDeps): GarmentTas
       // 遗留 running 保守标为 interrupted：极端情况下可能尚未真正发送，优先避免重复计费
       const running = await deps.listTasksByStatus('running');
       for (const task of running) {
-        await deps.updateTaskStatus(task.id, ['running'], 'interrupted', {
+        const changed = await deps.updateTaskStatus(task.id, ['running'], 'interrupted', {
           finishedAt: new Date().toISOString(),
           errorKind: 'interrupted',
           errorSummary: '应用被中断，本次结果未知；重试可能再次计费',
         });
+        if (changed) deps.onTaskSettled?.();
       }
     },
     async enqueueGarmentAnalysis(input: EnqueueGarmentAnalysisInput): Promise<EnqueueGarmentAnalysisResult> {

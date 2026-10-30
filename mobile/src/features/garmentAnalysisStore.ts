@@ -80,6 +80,8 @@ export function initGarmentTaskRunner(): GarmentTaskRunner {
     runner = createGarmentTaskRunner({
       ...createDefaultGarmentTaskRunnerDeps(),
       subscribeChanges: subscribeAnalysisChanges,
+      // 任务领取/完成/失败等状态落库后通知页面刷新；没有它页面会停在“正在分析…”
+      onTaskSettled: notifyAnalysisChanged,
     });
   }
   return runner;
