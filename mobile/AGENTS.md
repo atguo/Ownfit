@@ -42,3 +42,11 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 - `app/(tabs)/wardrobe.tsx`：`WardrobeItemSheet.onChanged` 只刷新列表不清空 detail——修复确认属性行后弹层被关闭（应关弹层的操作均显式调 `onClose`）。
 - `features/sheets/WardrobeItemSheet.tsx`：名称建议「采纳」后同步名称输入框并按"当前名称 == 建议"显示已采纳态（按钮禁用）——修复采纳无反馈、以及采纳后「保存修改」用旧名覆盖的问题。状态行透出任务 errorSummary（失败/中断/配置不可用带原因）。新增「一键确认全部 AI 推断（N 项）」按钮：逐条写入 `user_confirmed`（全部确认后按钮隐藏），真机验证通过。
 - `services/ai/garmentAnalysis.ts` 解析约定 v4/v5：接受整体 JSON、剥 `<think>` 思考段后的 JSON、正文恰好一个完整围栏块（前后允许说明文字）；拒绝多代码块与花括号截取修复，失败附内容摘要。提示词要求紧凑单行 JSON、条数够用即可；`ANALYSIS_MAX_TOKENS=40960`（项目用户指示；2048/4096 真机均被 finish_reason=length 截断，供应商拒绝该值会 400）。`openaiClient` 透出 `finishReason`，截断时失败原因明确指向截断而非格式错误。
+
+
+### M4 本地数据可靠性与任务恢复（2026-10-30，真机验证通过，待验收）
+
+- `data/repositories/maintenanceRepository.ts`：一致性扫描（缺文件/悬空主图引用/孤儿文件/可重建缩略图）、`cleanOrphanFiles`（调用时重扫、只删无记录引用者）、`rebuildMissingThumbnails`（原件缺失如实报失败）、`hasRoomForNewPhoto`（<50MB 拒绝，探测失败放行）。photoRepository 保存前接入容量检查。
+- `app/dev/data-tools.tsx`（我的页开发入口）：扫描/清理/重建/schema 信息；清理有二次确认。
+- `data/db.ts`：初始化失败记录阶段（open/key/migrate）与详情（`getLastDbInitFailure`）；`app/_layout.tsx` 启动探测，失败进安全模式横幅（资料保持原样+重试）。
+- 照片与隐私弹层更新为真实存储/无云恢复告知。加密抽检与安全模式演练经 adb 完成；升级演练见 `node --test mobile/tests/analysisMigration.test.cjs`。回归：`node --test mobile/tests/*.test.cjs`（64 项）。
