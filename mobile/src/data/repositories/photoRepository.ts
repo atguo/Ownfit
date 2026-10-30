@@ -7,6 +7,7 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 import { File, Directory, Paths } from 'expo-file-system';
 import { getDb } from '../db';
+import { hasRoomForNewPhoto } from './maintenanceRepository';
 
 /** 原件副本的最长边（px）。完整原图保留在系统相册，APP 不承诺管理相册原件。 */
 export const ORIGINAL_MAX_DIMENSION = 2048;
@@ -55,6 +56,10 @@ export async function savePhotoFiles(input: {
   sourceWidth: number;
   sourceHeight: number;
 }): Promise<{ id: string; originalPath: string; thumbPath: string }> {
+  // 容量防御（M4）：可用空间低于阈值时拒绝写入，避免写一半失败留下悬空记录
+  if (!(await hasRoomForNewPhoto())) {
+    throw new Error('设备存储空间不足（低于 50MB），已停止保存新照片。请清理空间后重试。');
+  }
   const id = newId();
 
   // 1. 原件副本：超过 2048px 等比缩小，小图保持原样
