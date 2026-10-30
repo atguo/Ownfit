@@ -147,6 +147,7 @@ export function WardrobeItemSheet({
   const isArchived = item?.status === 'archived';
   const pendingCommits = getPendingAnalysisCommitCount();
   const nameAdopted = !!analysis?.suggestedName?.value && name === analysis.suggestedName.value;
+  const aiAttributeCount = analysis?.attributes.filter((a) => a.source === 'ai_inferred').length ?? 0;
 
   function statusText(view: AnalysisView): string {
     const task = view.latestTask;
@@ -285,6 +286,30 @@ export function WardrobeItemSheet({
     await loadAnalysis(item.id);
     notifyAnalysisChanged();
     onChanged();
+  }
+
+  /** 一键确认：全部 AI 推断属性行写入用户确认（逐条写 user_confirmed，不再被后续同名 AI 行顶掉显示来源） */
+  async function confirmAllAiAttributes() {
+    if (!item || !analysis) return;
+    const aiRows = analysis.attributes.filter((attribute) => attribute.source === 'ai_inferred');
+    if (aiRows.length === 0) return;
+    try {
+      for (const attribute of aiRows) {
+        await recordUserAttribute({
+          itemId: item.id,
+          field: attribute.name,
+          value: attribute.value,
+          sourceType: 'user_confirmed',
+          sourceRef: '一键确认分析结果',
+        });
+      }
+      await loadAnalysis(item.id);
+      notifyAnalysisChanged();
+      onChanged();
+      toast(`已确认 ${aiRows.length} 项`);
+    } catch {
+      toast('确认失败，请重试');
+    }
   }
 
   /** 删除一条属性行（物理删除 + revision 递增） */
@@ -500,6 +525,14 @@ export function WardrobeItemSheet({
                 <Text style={styles.sourceNote}>
                   以下 {analysis.attributes.length} 项来自照片分析，可逐条确认或删除：
                 </Text>
+              ) : null}
+              {aiAttributeCount > 0 ? (
+                <Button
+                  variant="secondary"
+                  label={`一键确认全部 AI 推断（${aiAttributeCount} 项）`}
+                  onPress={() => void confirmAllAiAttributes()}
+                  style={styles.gap}
+                />
               ) : null}
               {analysis.attributes.map((attribute) => (
                 <AttributeRowView

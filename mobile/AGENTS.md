@@ -39,5 +39,5 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 - `garmentTaskRunner` 增 `onTaskSettled` 回调：任务领取/取消/stale/blocked/终态/启动恢复落库后通知（`garmentAnalysisStore` 接 `notifyAnalysisChanged`），修复任务完成后详情页停留「正在分析…」；执行意外异常兜底为 failed（发送前）/interrupted（发送后），不滞留 running。
 - 真机已走通分析全链路（照片 → 分析 → 确认 → 持久化）；中文属性行与重新分析状态刷新已真机复测通过。截断治理（v5 + 40960）后重分析成功：19 项全中文属性；`WardrobeItemSheet.formatTime` 改本地时区（原 UTC 截取差 8 小时）。回归：`node --test mobile/tests/*.test.cjs`（60 项）、`pnpm typecheck`。
 - `app/(tabs)/wardrobe.tsx`：`WardrobeItemSheet.onChanged` 只刷新列表不清空 detail——修复确认属性行后弹层被关闭（应关弹层的操作均显式调 `onClose`）。
-- `features/sheets/WardrobeItemSheet.tsx`：名称建议「采纳」后同步名称输入框并按"当前名称 == 建议"显示已采纳态（按钮禁用）——修复采纳无反馈、以及采纳后「保存修改」用旧名覆盖的问题。状态行透出任务 errorSummary（失败/中断/配置不可用带原因）。
+- `features/sheets/WardrobeItemSheet.tsx`：名称建议「采纳」后同步名称输入框并按"当前名称 == 建议"显示已采纳态（按钮禁用）——修复采纳无反馈、以及采纳后「保存修改」用旧名覆盖的问题。状态行透出任务 errorSummary（失败/中断/配置不可用带原因）。新增「一键确认全部 AI 推断（N 项）」按钮：逐条写入 `user_confirmed`（全部确认后按钮隐藏），真机验证通过。
 - `services/ai/garmentAnalysis.ts` 解析约定 v4/v5：接受整体 JSON、剥 `<think>` 思考段后的 JSON、正文恰好一个完整围栏块（前后允许说明文字）；拒绝多代码块与花括号截取修复，失败附内容摘要。提示词要求紧凑单行 JSON、条数够用即可；`ANALYSIS_MAX_TOKENS=40960`（项目用户指示；2048/4096 真机均被 finish_reason=length 截断，供应商拒绝该值会 400）。`openaiClient` 透出 `finishReason`，截断时失败原因明确指向截断而非格式错误。
