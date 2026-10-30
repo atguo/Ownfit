@@ -65,7 +65,7 @@ export default function ProfileScreen() {
         onPress={() => setSheet('reference')}
       />
       <SettingRow icon="grid" title="身材资料" value="按需补充" onPress={() => setSheet('body')} />
-      <SettingRow icon="lock" title="照片与隐私" value="仅本地演示" onPress={() => setSheet('privacy')} />
+      <SettingRow icon="lock" title="照片与隐私" value="加密存储 · 无云备份" onPress={() => setSheet('privacy')} />
       <SettingRow
         icon="spark"
         title="模型配置"
