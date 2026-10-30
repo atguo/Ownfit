@@ -64,8 +64,12 @@ const MEASUREMENT_SUGGESTIONS: Partial<Record<ItemCategory, readonly string[]>> 
   包: ['长', '宽', '高'],
 };
 
+/** 本地时区的 yyyy-MM-dd HH:mm（ISO 字符串是 UTC，直接截取会差 8 小时） */
 function formatTime(iso: string): string {
-  return iso.slice(0, 16).replace('T', ' ');
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 /** 来源三色徽章文字与色值（重构设计 §6） */
@@ -142,6 +146,7 @@ export function WardrobeItemSheet({
   const isDraft = item?.status === 'draft';
   const isArchived = item?.status === 'archived';
   const pendingCommits = getPendingAnalysisCommitCount();
+  const nameAdopted = !!analysis?.suggestedName?.value && name === analysis.suggestedName.value;
 
   function statusText(view: AnalysisView): string {
     const task = view.latestTask;
@@ -156,13 +161,15 @@ export function WardrobeItemSheet({
           ? `上次分析完成（${formatTime(view.lastValidResult.completedAt)}，模型：${view.lastValidResult.modelName}）`
           : '照片不够清楚，建议换成更清晰的单品照后再试';
       case 'failed':
-        return '上次分析失败，可重试';
+        return task.errorSummary ? `上次分析失败：${task.errorSummary}` : '上次分析失败，可重试';
       case 'interrupted':
-        return '上次分析被中断，结果未知；重试可能再次计费';
+        return task.errorSummary
+          ? `上次分析被中断（${task.errorSummary}）；重试可能再次计费`
+          : '上次分析被中断，结果未知；重试可能再次计费';
       case 'stale':
         return '这件资料已更新，上次结果不再适用于当前照片';
       case 'blocked':
-        return '所选模型配置已变化或不可用，请重新选择后再分析';
+        return task.errorSummary ?? '所选模型配置已变化或不可用，请重新选择后再分析';
       case 'cancelled':
         return '上次分析已取消（衣物归档或资料删除后不再继续）';
       default:
@@ -175,6 +182,21 @@ export function WardrobeItemSheet({
     await updateItemBasics(item.id, { name, category: category ?? undefined });
     onChanged();
     toast('已保存');
+  }
+
+  /** 采纳 AI 名称建议：写入单品名称并同步名称输入框（不同步的话“保存修改”会用旧名覆盖） */
+  async function adoptSuggestedName() {
+    if (!item) return;
+    const suggestion = analysis?.suggestedName?.value?.trim();
+    if (!suggestion) return;
+    try {
+      await updateItemBasics(item.id, { name: suggestion });
+      setName(suggestion);
+      toast('已采纳为单品名称');
+      onChanged();
+    } catch {
+      toast('采纳失败，请重试');
+    }
   }
 
   async function confirmDraft() {
@@ -430,24 +452,21 @@ export function WardrobeItemSheet({
                 </View>
               ) : null}
 
-              {/* AI 名称建议：采纳后写入单品名称 */}
-              {analysis.suggestedName ? (
+              {/* AI 名称建议：采纳后写入单品名称；当前名称与建议一致即视为已采纳（重开详情同样生效） */}
+              {analysis.suggestedName?.value ? (
                 <View style={styles.attributeRow}>
                   <View style={styles.attributeText}>
                     <Text style={styles.attributeName}>名称建议</Text>
                     <Text style={styles.attributeValue}>{analysis.suggestedName.value}</Text>
-                    <Text style={[styles.sourceText, { color: colors.muted }]}>AI 推断（未确认）</Text>
+                    <Text style={[styles.sourceText, { color: colors.muted }]}>
+                      {nameAdopted ? '已采纳为单品名称' : 'AI 推断（未确认）'}
+                    </Text>
                   </View>
                   <Button
                     variant="chip"
-                    label="采纳"
-                    onPress={() => {
-                      if (!item) return;
-                      void updateItemBasics(item.id, { name: analysis.suggestedName?.value ?? null }).then(() => {
-                        toast('已采纳为单品名称');
-                        onChanged();
-                      });
-                    }}
+                    label={nameAdopted ? '已采纳' : '采纳'}
+                    disabled={nameAdopted}
+                    onPress={() => void adoptSuggestedName()}
                   />
                 </View>
               ) : null}

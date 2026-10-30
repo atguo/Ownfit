@@ -256,7 +256,7 @@ export default function WardrobeScreen() {
         detail={detail}
         onClose={() => setDetail(null)}
         onChanged={() => {
-          setDetail(null);
+          // 只刷新列表（卡片状态/名称/已删除标记）；需要关弹层的操作自己调 onClose
           void load();
         }}
         onUse={(id) => {
