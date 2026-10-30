@@ -17,6 +17,7 @@ const CONTRACT_ENTRY = path.resolve(__dirname, '../../packages/contract/src/inde
 
 /** 无副作用的前端/原生依赖 stub（测试不触碰真实文件与设备） */
 const expoStubs = {
+  'expo-file-system/legacy': {}, // maintenanceRepository 引入；此处不触达，stub 防止落到真实 ESM 包
   'expo-sqlite': {},
   'expo-secure-store': {},
   'expo-crypto': {},
