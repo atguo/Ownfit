@@ -13,6 +13,7 @@ import { getDb } from '../db';
 import { updateTaskStatus } from './taskRepository';
 
 const REFERENCE_ID = 'preview-reference';
+const REFERENCE_RELATIVE_PATH = 'preview-ref/reference.jpg';
 const REFERENCE_MAX_DIMENSION = 1024;
 
 export interface PreviewReference {
@@ -34,16 +35,35 @@ export async function getPreviewReference(): Promise<PreviewReference | null> {
     'SELECT value FROM preferences WHERE id = ?',
     REFERENCE_ID,
   );
-  if (!row?.value) return null;
-  try {
-    const parsed = JSON.parse(row.value) as PreviewReference;
-    if (!parsed?.path) return null;
-    // 文件被清理时视为无参考（记录不假装有效）
-    if (!new File(Paths.document, parsed.path).exists) return null;
-    return parsed;
-  } catch {
-    return null;
+  if (row?.value) {
+    try {
+      const parsed = JSON.parse(row.value) as PreviewReference;
+      if (!parsed?.path) return null;
+      // 文件被清理时视为无参考（记录不假装有效）
+      if (!new File(Paths.document, parsed.path).exists) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
   }
+  // 自愈：文件已落盘但记录缺失（上次写入记录失败/进程被杀）——重建记录而不是让用户重选
+  const file = new File(Paths.document, REFERENCE_RELATIVE_PATH);
+  if (!file.exists) return null;
+  const record: PreviewReference = {
+    path: REFERENCE_RELATIVE_PATH,
+    updatedAt: file.modificationTime ? new Date(file.modificationTime).toISOString() : new Date().toISOString(),
+  };
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO preferences (id, value, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    REFERENCE_ID,
+    JSON.stringify(record),
+    'user_selected',
+    now,
+    now,
+  );
+  return record;
 }
 
 /**
@@ -72,15 +92,19 @@ export async function savePreviewReference(input: {
   new File(saved.uri).move(target);
 
   const record: PreviewReference = {
-    path: `preview-ref/reference.jpg`,
+    path: REFERENCE_RELATIVE_PATH,
     updatedAt: new Date().toISOString(),
   };
   const db = await getDb();
+  const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO preferences (id, value) VALUES (?, ?)
-     ON CONFLICT(id) DO UPDATE SET value = excluded.value`,
+    `INSERT INTO preferences (id, value, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     REFERENCE_ID,
     JSON.stringify(record),
+    'user_selected',
+    now,
+    now,
   );
   return record;
 }

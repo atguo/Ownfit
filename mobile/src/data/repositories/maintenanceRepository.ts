@@ -170,3 +170,52 @@ export async function hasRoomForNewPhoto(): Promise<boolean> {
   const free = await getFreeDiskBytes();
   return free === null || free >= MIN_FREE_BYTES_FOR_PHOTO;
 }
+
+// ---------------------------------------------------------------------------
+// 衣物档案导出（M5 轨 B1）：结构化档案 JSON，不含照片
+// ---------------------------------------------------------------------------
+
+export interface WardrobeProfileEntry {
+  id: string;
+  name: string | null;
+  category: string | null;
+  /** AI 与人工合并后的动态属性（同名取最新） */
+  attributes: Array<{ name: string; value: string; source: string }>;
+  /** 用户确认的颜色 */
+  colors: Array<{ name: string; hex: string; isPrimary: boolean }>;
+  /** 仅用户录入的测量 */
+  measurements: Array<{ name: string; amount: string; unit: string; note?: string }>;
+}
+
+/**
+ * 导出衣物档案（仅已入库、未归档、未删除的单品）。
+ * 不含照片与路径——档案用于搭配推荐实验与调试，不需要图像。
+ */
+export async function exportWardrobeProfiles(): Promise<{
+  exportedAt: string;
+  items: WardrobeProfileEntry[];
+}> {
+  const db = await getDb();
+  const { getAnalysisView } = await import('./attributeRepository');
+  const rows = await db.getAllAsync<{ id: string }>(
+    "SELECT id FROM items WHERE status = 'active' ORDER BY created_at ASC",
+  );
+  const items: WardrobeProfileEntry[] = [];
+  for (const row of rows) {
+    const view = await getAnalysisView(row.id);
+    items.push({
+      id: row.id,
+      name: view.suggestedName?.value ?? null,
+      category: view.category.value ?? null,
+      attributes: view.attributes.map((a) => ({ name: a.name, value: a.value, source: a.source })),
+      colors: view.colors.value.map((c) => ({ name: c.name, hex: c.hex, isPrimary: c.isPrimary })),
+      measurements: (view.measurements?.list ?? []).map((m) => ({
+        name: m.name,
+        amount: m.amount,
+        unit: m.unit,
+        ...(m.note ? { note: m.note } : {}),
+      })),
+    });
+  }
+  return { exportedAt: new Date().toISOString(), items };
+}

@@ -10,9 +10,19 @@ export interface SceneDefault {
   scene: string;
 }
 
+/**
+ * preferences 是多用途共享表：偏好项、颜色库（color-library）、人物参考（preview-reference）都在其中。
+ * 约定：偏好项 id 一律以 `pref-` 开头，其他用途避开该前缀——读取偏好时据此过滤，
+ * 避免把颜色库/人物参考的 JSON 当成偏好显示（真机曾出现）。
+ */
+const PREFERENCE_ID_PREFIX = 'pref-';
+
 export async function getPreferences(): Promise<string[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{ value: string }>('SELECT value FROM preferences ORDER BY created_at');
+  const rows = await db.getAllAsync<{ value: string }>(
+    'SELECT value FROM preferences WHERE id LIKE ? ORDER BY created_at',
+    `${PREFERENCE_ID_PREFIX}%`,
+  );
   return rows.map((r) => r.value);
 }
 
@@ -20,7 +30,7 @@ export async function setPreferences(values: string[]): Promise<void> {
   const db = await getDb();
   const now = new Date().toISOString();
   await db.withTransactionAsync(async () => {
-    await db.runAsync('DELETE FROM preferences');
+    await db.runAsync('DELETE FROM preferences WHERE id LIKE ?', `${PREFERENCE_ID_PREFIX}%`);
     for (const value of values) {
       await db.runAsync(
         'INSERT INTO preferences (id, value, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
