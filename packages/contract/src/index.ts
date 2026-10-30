@@ -2,7 +2,7 @@
 // 消费方：mobile/（界面）、packages/experiments/（A 线实验）——两侧共用同一套校验。
 // 契约规则、冻结状态与缺省语义见本包 README.md；变更规则见 docs/开发计划.md §6.3。
 
-export const CONTRACT_VERSION = '1.0.0-draft';
+export const CONTRACT_VERSION = '1.0.0';
 
 export {
   wearSlots,

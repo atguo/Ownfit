@@ -11,7 +11,8 @@ import {
   type Plan,
   type PlanRequest,
 } from './schema';
-import { parseGarmentAnalysis } from './garmentAnalysis';
+import { parseGarmentAnalysis, GARMENT_ANALYSIS_VERSION } from './garmentAnalysis';
+import { CONTRACT_VERSION } from './index';
 
 const scene = { city: '杭州', day: '今天', scene: '日常通勤' } as const;
 
@@ -283,6 +284,6 @@ if (process.argv[1]?.includes('test') || process.argv[1]?.includes('samples')) {
   runContractTests();
   runGarmentAnalysisTests();
   console.log(
-    `契约样例测试通过（CONTRACT_VERSION=1.0.0-draft，7 组搭配样例；GARMENT_ANALYSIS_VERSION=2.0.0-draft，15 组衣物分析样例）。`,
+    `契约样例测试通过（CONTRACT_VERSION=${CONTRACT_VERSION}，7 组搭配样例；GARMENT_ANALYSIS_VERSION=${GARMENT_ANALYSIS_VERSION}，15 组衣物分析样例）。`,
   );
 }
