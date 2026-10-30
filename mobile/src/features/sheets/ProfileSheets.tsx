@@ -108,9 +108,12 @@ export function PrivacySheet({
   onManageDemo: () => void;
 }) {
   return (
-    <Sheet visible={visible} title="照片留在你的手机。" onClose={onClose}>
+    <Sheet visible={visible} title="照片与资料留在你的手机。" onClose={onClose}>
       <Text style={styles.description}>
-        所选图片仅用于本地预览，不上传服务器。移除演示数据可以清除演示内容、收藏和偏好。
+        {'资料与照片保存在本机加密数据库和应用私有目录；只有做衣物分析等 AI 功能时，才会把对应那一件的照片发送到你手动配置的模型服务。'}
+      </Text>
+      <Text style={styles.description}>
+        {'没有云端备份：卸载应用或设备丢失、损坏时，本机资料可能无法找回。系统自带的设备换机与云备份默认不收录本应用的资料目录。'}
       </Text>
       <Button variant="secondary" label="管理演示数据" onPress={onManageDemo} style={styles.full} />
       <Button variant="text" label="返回" onPress={onClose} />
