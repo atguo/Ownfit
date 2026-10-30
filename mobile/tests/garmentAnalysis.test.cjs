@@ -136,6 +136,8 @@ function createAiLoader({ fileSystem, secureStore, fetch, adapter }) {
   const cache = new Map();
   const stubs = {
     'expo-file-system': fileSystem,
+    'expo-file-system/legacy': {}, // maintenanceRepository 引入；此处不触达，stub 防止落到真实 ESM 包
+
     'expo-secure-store': secureStore,
     'expo-image-manipulator': { SaveFormat: { JPEG: 'jpeg' }, ImageManipulator: { manipulate: () => ({}) } },
     './minimaxClient': { generateImage: async () => ({ ok: false, latencyMs: 0, error: { kind: 'stub', message: 'not used' } }) },
