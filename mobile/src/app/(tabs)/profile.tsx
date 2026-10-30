@@ -13,6 +13,7 @@ import {
 } from '../../features/sheets/ProfileSheets';
 import { setPrefs, useDemoStore } from '../../features/demoStore';
 import { getPreferences } from '../../data/repositories/settingsRepository';
+import { getPreviewReference } from '../../data/repositories/previewRepository';
 import { colors, radius, type } from '../../ui/tokens';
 
 type SheetName = 'prefs' | 'reference' | 'body' | 'privacy' | 'reset' | null;
@@ -21,13 +22,15 @@ type SheetName = 'prefs' | 'reference' | 'body' | 'privacy' | 'reset' | null;
 // 长期偏好与当次意图分开呈现；页面另设开发区入口（组件展示，仅 M1 开发用）。
 export default function ProfileScreen() {
   const router = useRouter();
-  const { prefs, reference } = useDemoStore();
+  const { prefs } = useDemoStore();
   const [sheet, setSheet] = useState<SheetName>(null);
+  const [referenceAt, setReferenceAt] = useState<string | null>(null);
 
-  // M2：偏好来自本地数据库；人物参考仍是演示状态（M5 接真实参考）
+  // M2：偏好来自本地数据库；M5：人物参考为真实录入（本机私有目录）
   useFocusEffect(
     useCallback(() => {
       void getPreferences().then(setPrefs);
+      void getPreviewReference().then((ref) => setReferenceAt(ref?.updatedAt ?? null));
     }, []),
   );
 
@@ -61,7 +64,7 @@ export default function ProfileScreen() {
       <SettingRow
         icon="user"
         title="人物参考"
-        value={reference ? '使用演示参考' : '尚未准备'}
+        value={referenceAt ? `已准备（${referenceAt.slice(0, 10)}）` : '尚未准备'}
         onPress={() => setSheet('reference')}
       />
       <SettingRow icon="grid" title="身材资料" value="按需补充" onPress={() => setSheet('body')} />

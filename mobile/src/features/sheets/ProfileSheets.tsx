@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { Sheet } from '../../ui/components/Sheet';
 import { ChoiceRow } from '../../ui/components/Rows';
 import { Notice } from '../../ui/components/Basics';
@@ -7,7 +8,13 @@ import { Button } from '../../ui/components/Button';
 import { useToast } from '../../ui/components/Toast';
 import { colors, type } from '../../ui/tokens';
 import { getPreferences, saveSceneDefault, setPreferences } from '../../data/repositories/settingsRepository';
-import { resetDemo, setPrefs, setReference, useDemoStore } from '../demoStore';
+import {
+  getPreviewReference,
+  removePreviewReference,
+  savePreviewReference,
+  type PreviewReference,
+} from '../../data/repositories/previewRepository';
+import { resetDemo, setPrefs, useDemoStore } from '../demoStore';
 import { prefOptions } from '../../data/demo';
 
 // “我的”页弹层集合（原型 preferences/reference/body/privacy/reset）。
@@ -64,24 +71,77 @@ export function PreferencesSheet({ visible, onClose }: { visible: boolean; onClo
   );
 }
 
+// 人物参考（M5 真实版）：相册选肖像照，压缩后存本机私有目录；
+// 仅在生成上身预览时发送给用户手动配置的图像生成服务，不作他用。
 export function ReferenceSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { reference } = useDemoStore();
   const toast = useToast();
+  const [reference, setRef] = useState<PreviewReference | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (visible) void getPreviewReference().then(setRef);
+  }, [visible]);
+
+  async function pick() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      toast('需要相册权限才能选择参考照');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 1,
+      exif: false,
+      allowsMultipleSelection: false,
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    const asset = result.assets[0];
+    setBusy(true);
+    try {
+      const saved = await savePreviewReference({
+        sourceUri: asset.uri,
+        sourceWidth: asset.width ?? 0,
+        sourceHeight: asset.height ?? 0,
+      });
+      setRef(saved);
+      toast('人物参考已保存，仅存本机');
+    } catch (error) {
+      toast(`保存失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    try {
+      await removePreviewReference();
+      setRef(null);
+      toast('已移除人物参考');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <Sheet visible={visible} title="你的参考，由你决定。" onClose={onClose}>
       <Text style={styles.description}>
-        演示版只使用虚构模特，不需要上传你的脸部或身体照片。
+        {reference
+          ? '已保存人物参考照（仅存本机私有目录）。生成上身预览时，才会把它发送到你手动配置的图像生成服务。'
+          : '生成上身预览需要一张你本人的正面照片作参考：只存本机，仅发送给你手动配置的图像生成服务，不作他用。'}
       </Text>
+      {reference ? (
+        <Notice>{`已准备（${reference.updatedAt.slice(0, 10)}）。更换会覆盖旧参考并使旧预览过时。`}</Notice>
+      ) : null}
       <Button
         variant="primary"
-        label={reference ? '移除演示参考' : '使用演示参考'}
-        onPress={() => {
-          setReference(!reference);
-          onClose();
-          toast('人物参考状态已更新');
-        }}
+        label={busy ? '处理中…' : reference ? '更换参考照' : '从相册选择'}
+        onPress={() => void pick()}
+        disabled={busy}
       />
+      {reference ? (
+        <Button variant="text" label="移除参考照" onPress={() => void remove()} disabled={busy} style={styles.full} />
+      ) : null}
+      <Button variant="text" label="返回" onPress={onClose} />
     </Sheet>
   );
 }

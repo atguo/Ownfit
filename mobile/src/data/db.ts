@@ -163,13 +163,31 @@ async function migrateToV3(db: SQLite.SQLiteDatabase): Promise<void> {
         );
         CREATE INDEX IF NOT EXISTS idx_tasks_item_created ON tasks(item_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_active_item ON tasks(item_id) WHERE status IN ('queued', 'running');
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_active_kind_item_key ON tasks(kind, item_id, input_key) WHERE status IN ('queued', 'running');
         CREATE TABLE IF NOT EXISTS ai_task_preferences (
           kind TEXT PRIMARY KEY NOT NULL,
           default_config_id TEXT NOT NULL
         );
       `);
     await db.execAsync('PRAGMA user_version = 3');
+  });
+}
+
+/**
+ * schema v4（M5 上身预览）：活动任务唯一索引改为 (kind, item_id, input_key)。
+ * 原因：原 `idx_tasks_active_item` 只按 item_id 唯一，衣物分析任务与预览任务
+ * 落在同一索引里会互相阻塞（同一单品不能同时分析与生成预览）；
+ * 只按 item_id+kind 又会让"同一单品的不同方案"无法并存。
+ * 加上 input_key（输入版本指纹）后：不同任务类型互不干扰，
+ * 同类型同输入不重复入队，同类型不同输入可各自排队。
+ */
+async function migrateToV4(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await db.execAsync('DROP INDEX IF EXISTS idx_tasks_active_item');
+    await db.execAsync(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_active_kind_item_key ON tasks(kind, item_id, input_key) WHERE status IN ('queued', 'running')",
+    );
+    await db.execAsync('PRAGMA user_version = 4');
   });
 }
 
@@ -185,6 +203,7 @@ export const schemaMigrations: ReadonlyArray<{
   { version: 1, up: migrateToV1 },
   { version: 2, up: migrateToV2 },
   { version: 3, up: migrateToV3 },
+  { version: 4, up: migrateToV4 },
 ];
 
 /**

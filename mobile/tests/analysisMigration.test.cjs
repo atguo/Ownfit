@@ -1,4 +1,4 @@
-// P2 回归：schema v3 迁移与任务数据基础（分批执行手册 P2）。
+// P2 回归：schema 迁移与任务数据基础（分批执行手册 P2；v4 增加活动任务唯一索引的 kind/input_key 维度）。
 // 规则：
 // - 迁移测试必须调用生产迁移步骤（db.ts 的 runMigrations / schemaMigrations），
 //   不在测试里另复制一套建表 SQL。
@@ -144,13 +144,13 @@ const taskInput = (overrides = {}) => ({
 // 测试（仅在本文件被直接运行时注册；被其他测试 require 时不注册）
 // ---------------------------------------------------------------------------
 if (require.main === module) {
-  test('空库迁移到 v3：建 tasks 与 ai_task_preferences，items/attributes 增列', async () => {
+  test('空库迁移到 v4：建 tasks 与 ai_task_preferences，items/attributes 增列', async () => {
     const { db, adapter, close } = createMemoryAdapter();
     try {
       const { runMigrations } = loadDbModule();
       await runMigrations(adapter);
 
-      assert.equal(userVersion(db), 3);
+      assert.equal(userVersion(db), 4);
       assert.equal(tableExists(db, 'tasks'), true);
       assert.equal(tableExists(db, 'ai_task_preferences'), true);
       assert.ok(columnNames(db, 'items').includes('revision'));
@@ -163,7 +163,7 @@ if (require.main === module) {
     }
   });
 
-  test('v1 升级到 v3：旧资料保留，NULL value 回填 unknown，item_version/revision 保持', async () => {
+  test('v1 升级到 v4：旧资料保留，NULL value 回填 unknown，item_version/revision 保持', async () => {
     const { db, adapter, close } = createMemoryAdapter();
     try {
       const { runMigrations, schemaMigrations } = loadDbModule();
@@ -190,7 +190,7 @@ if (require.main === module) {
 
       await runMigrations(adapter);
 
-      assert.equal(userVersion(db), 3);
+      assert.equal(userVersion(db), 4);
       const item = db.prepare('SELECT * FROM items WHERE id = ?').get('i1');
       assert.equal(item.name, '旧衬衫');
       assert.equal(item.category, '上衣');
@@ -205,7 +205,7 @@ if (require.main === module) {
     }
   });
 
-  test('v2 升级到 v3：方案/穿着/照片/属性全部保留', async () => {
+  test('v2 升级到 v4：方案/穿着/照片/属性全部保留', async () => {
     const { db, adapter, close } = createMemoryAdapter();
     try {
       const { runMigrations, schemaMigrations } = loadDbModule();
@@ -227,7 +227,7 @@ if (require.main === module) {
 
       await runMigrations(adapter);
 
-      assert.equal(userVersion(db), 3);
+      assert.equal(userVersion(db), 4);
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM plans').get().n, 1);
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM plan_items').get().n, 1);
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM worn_records').get().n, 1);
@@ -247,8 +247,37 @@ if (require.main === module) {
 
       await runMigrations(adapter);
 
-      assert.equal(userVersion(db), 3);
+      assert.equal(userVersion(db), 4);
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 1);
+    } finally {
+      close();
+    }
+  });
+
+  test('v4 活动任务唯一索引按 (kind, item_id, input_key)：不同 kind 与不同输入可并存', async () => {
+    const { db, adapter, close } = createMemoryAdapter();
+    try {
+      const { runMigrations } = loadDbModule();
+      await runMigrations(adapter);
+      const insert = (id, kind, itemId, inputKey) =>
+        db
+          .prepare(
+            "INSERT INTO tasks (id,kind,item_id,status,input_revision,attempt,photo_id,input_key,request_key,config_id,config_snapshot,config_revision,contract_version,prompt_version,created_at,updated_at) " +
+              "VALUES (?,?,?,'queued',1,1,'none',?,?,'c','{}','legacy','1.0.0','1','now','now')",
+          )
+          .run(id, kind, itemId, inputKey, `req-${id}`);
+
+      // 同 kind 同 item 同输入 → 唯一索引拒绝
+      insert('t1', 'garment_analysis', 'item-a', 'key-1');
+      assert.throws(() => insert('t2', 'garment_analysis', 'item-a', 'key-1'));
+
+      // 同 kind 同 item 不同输入 → 允许并存
+      insert('t3', 'garment_analysis', 'item-a', 'key-2');
+
+      // 不同 kind 同 item → 允许并存（预览与衣物分析互不阻塞）
+      insert('t4', 'try_on_preview', 'item-a', 'key-1');
+
+      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 3);
     } finally {
       close();
     }
@@ -272,7 +301,7 @@ if (require.main === module) {
       // 解除注入后重试应成功（不清库）
       adapter.setFailOn(null);
       await runMigrations(adapter);
-      assert.equal(userVersion(db), 3);
+      assert.equal(userVersion(db), 4);
       assert.equal(tableExists(db, 'tasks'), true);
     } finally {
       close();
