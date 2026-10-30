@@ -8,6 +8,7 @@ import { Tag } from '../ui/components/Basics';
 import { Icon } from '../ui/Icon';
 import { RealOutfitBoard } from '../ui/components/RealOutfitBoard';
 import { Sheet } from '../ui/components/Sheet';
+import { PreviewSheet } from '../features/sheets/PreviewSheet';
 import { WearSheet } from '../features/sheets/WearSheet';
 import { SlotReplaceSheet } from '../features/sheets/SlotReplaceSheet';
 import {
@@ -50,7 +51,7 @@ export default function OutfitScreen() {
   const [slotViews, setSlotViews] = useState<Record<string, SlotView>>({});
   const [wearOpen, setWearOpen] = useState(false);
   const [replaceSlotOpen, setReplaceSlotOpen] = useState<OutfitSlot | null>(null);
-  const [previewNotice, setPreviewNotice] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const presentSlots = (['dress', 'top', 'bottom', 'shoes'] as OutfitSlot[]).filter(
     (slot) => session.slots[slot],
@@ -202,10 +203,10 @@ export default function OutfitScreen() {
           variant="secondary"
           icon="spark"
           accessibilityLabel="上身预览"
-          onPress={() => setPreviewNotice(true)}
+          onPress={() => setPreviewOpen(true)}
         />
       </View>
-      <Text style={styles.underNote}>上身预览将随 AI 能力接入开放，当前版本不生成预览图</Text>
+      <Text style={styles.underNote}>上身预览为 AI 生成示意图，非真实试穿</Text>
 
       <WearSheet visible={wearOpen} onClose={() => setWearOpen(false)} />
       <SlotReplaceSheet
@@ -218,14 +219,13 @@ export default function OutfitScreen() {
         }}
       />
 
-      {previewNotice ? (
-        <Sheet visible title="上身预览未接入" onClose={() => setPreviewNotice(false)}>
-          <Text style={styles.description}>
-            {'上身预览将随 AI 能力接入开放。当前版本不生成预览图，\n避免以虚构效果代替你的真实穿着。搭配已保留，可先收藏。'}
-          </Text>
-          <Button variant="primary" label="知道了" onPress={() => setPreviewNotice(false)} />
-        </Sheet>
-      ) : null}
+      <PreviewSheet
+        visible={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        basisItemId={session.basisId ?? ''}
+        itemIds={presentSlots.flatMap((slot) => (session.slots[slot] ? [session.slots[slot] as string] : []))}
+        wearStyle={session.wear}
+      />
     </Page>
   );
 }

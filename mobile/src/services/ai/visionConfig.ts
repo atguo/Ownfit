@@ -75,3 +75,54 @@ export async function resolveVisionConfig(defaultConfigId?: string | null): Prom
 
   return { status: 'choose', candidates: usable };
 }
+
+/** 图像生成候选：MiniMax 图像 URL 类型 + image_gen 能力标签 */
+function isImageGenCandidate(config: ModelConfig): boolean {
+  return config.urlKind === 'minimax' && config.capabilities.includes('image_gen') && !!config.baseUrl && !!config.modelId;
+}
+
+/**
+ * 解析可用的图像生成模型配置（上身预览用）。
+ * 规则与 resolveVisionConfig 完全一致（D1）：missing/invalid/choose/ready，
+ * 默认失效时即使只剩一个候选也 choose，不静默切换供应商。
+ */
+export async function resolveImageGenConfig(defaultConfigId?: string | null): Promise<ConfigResolution> {
+  const read = loadConfigsStructured();
+  if (!read.ok) {
+    return {
+      status: 'invalid',
+      reason: 'config_unreadable',
+      message: '本地模型配置无法读取（文件可能已损坏），请到“模型配置”检查后重试',
+    };
+  }
+
+  const candidates = read.configs.filter(isImageGenCandidate);
+  if (candidates.length === 0) {
+    return { status: 'missing' };
+  }
+
+  const usable: ModelConfig[] = [];
+  for (const config of candidates) {
+    const key = await getApiKey(config.keyRef);
+    if (key) usable.push(config);
+  }
+  if (usable.length === 0) {
+    return {
+      status: 'invalid',
+      reason: 'key_missing',
+      message: '图像生成配置缺少可读取的 API Key，请在“模型配置”中补全',
+    };
+  }
+
+  const preferred = defaultConfigId ? usable.find((config) => config.id === defaultConfigId) : undefined;
+  if (preferred) {
+    return { status: 'ready', config: preferred, callRevision: callRevisionOf(preferred) };
+  }
+
+  if (!defaultConfigId && usable.length === 1) {
+    const only = usable[0];
+    return { status: 'ready', config: only, callRevision: callRevisionOf(only) };
+  }
+
+  return { status: 'choose', candidates: usable };
+}
