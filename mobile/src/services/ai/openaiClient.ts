@@ -7,6 +7,8 @@ export interface ChatResult {
   ok: boolean;
   content: string;
   latencyMs: number;
+  /** 供应商返回的 finish_reason（'length' 表示输出被 max_tokens 截断）；缺失时为 null */
+  finishReason?: string | null;
   error?: { kind: string; message: string };
 }
 
@@ -71,13 +73,21 @@ export async function chatCompletion(
         error: { kind: classify(response.status), message: `HTTP ${response.status}：${body.slice(0, 200)}` },
       };
     }
-    const raw = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
+    const raw = (await response.json()) as {
+      choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>;
+    };
     const part = raw.choices?.[0]?.message?.content;
+    const finishReason = raw.choices?.[0]?.finish_reason;
     const content = typeof part === 'string' ? part : '';
     // HTTP 200 即视为连接可用：推理型模型可能把小 token 预算全部用于思考而返回空内容，
     // 空回复不代表鉴权或地址有问题（真实案例：glm-5.3-flash + max_tokens 16）。
     // 注意：分析层必须自行拒绝空内容，不能沿用该判断。
-    return { ok: true, content, latencyMs };
+    return {
+      ok: true,
+      content,
+      latencyMs,
+      finishReason: typeof finishReason === 'string' ? finishReason : null,
+    };
   } catch (error) {
     const latencyMs = Date.now() - started;
     const aborted = error instanceof Error && error.name === 'AbortError';
