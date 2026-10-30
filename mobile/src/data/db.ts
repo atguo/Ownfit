@@ -217,18 +217,48 @@ export function getDb(): Promise<SQLite.SQLiteDatabase> {
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
+/** 初始化失败信息（M4 安全模式）：阶段 + 原始消息；成功初始化后清除 */
+export type DbInitFailure = { stage: 'open' | 'key' | 'migrate'; message: string };
+let lastInitFailure: DbInitFailure | null = null;
+
+/** 最近一次数据库初始化失败的阶段与消息；无失败时为 null（供安全模式展示与重试） */
+export function getLastDbInitFailure(): DbInitFailure | null {
+  return lastInitFailure;
+}
+
 async function openAndMigrate(): Promise<SQLite.SQLiteDatabase> {
-  const key = await getOrCreateKey();
-  const db = await SQLite.openDatabaseAsync(DB_NAME, {
-    enableChangeListener: false,
-    useNewConnection: true,
-  });
-  // SQLCipher：PRAGMA key 必须是打开后的第一条语句
-  await db.execAsync(`PRAGMA key = '${key}'`);
-  // 校验密钥正确（错误密钥下任何查询都会报"文件不是数据库"）
-  await db.getFirstAsync('SELECT count(*) FROM sqlite_master');
-  await runMigrations(db);
-  return db;
+  try {
+    const key = await getOrCreateKey();
+    const db = await SQLite.openDatabaseAsync(DB_NAME, {
+      enableChangeListener: false,
+      useNewConnection: true,
+    });
+    try {
+      // SQLCipher：PRAGMA key 必须是打开后的第一条语句
+      await db.execAsync(`PRAGMA key = '${key}'`);
+      // 校验密钥正确（错误密钥下任何查询都会报"文件不是数据库"）
+      await db.getFirstAsync('SELECT count(*) FROM sqlite_master');
+      await runMigrations(db);
+      lastInitFailure = null;
+      return db;
+    } catch (error) {
+      try {
+        await db.closeAsync();
+      } catch {
+        // 关闭失败不影响错误上报
+      }
+      throw error;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stage: DbInitFailure['stage'] = message.includes('file is not a database')
+      ? 'key'
+      : /migration|user_version/i.test(message)
+        ? 'migrate'
+        : 'open';
+    lastInitFailure = { stage, message };
+    throw error;
+  }
 }
 
 /** 仅供诊断使用：确认数据库已加密（加密后文件头不再是明文 SQLite 标记） */
