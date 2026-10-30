@@ -52,6 +52,7 @@ export default function RootLayout() {
           <Stack.Screen name="ai/config" />
           <Stack.Screen name="ai/config-edit" />
           <Stack.Screen name="dev/components" />
+          <Stack.Screen name="dev/data-tools" />
         </Stack>
         {initFailed ? (
           <View style={styles.banner} pointerEvents="none">
