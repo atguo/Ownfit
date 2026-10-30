@@ -130,7 +130,14 @@ export default function OutfitsScreen() {
         </EmptyState>
       )}
 
-      <FeedbackSheet planId={feedbackId} onClose={() => setFeedbackId(null)} />
+      <FeedbackSheet
+        planId={feedbackId}
+        onClose={() => {
+          setFeedbackId(null);
+          // 记录穿过/感受后立即刷新列表状态（页面未失焦，useFocusEffect 不会再触发）
+          void (async () => setPlans(await listPlans()))();
+        }}
+      />
     </Page>
   );
 }
