@@ -124,31 +124,27 @@ function seedItem(db, { id = 'item-a', status = 'active', revision = 1, photoId 
   }
 }
 
+/** 2.0.0-draft 契约形状：动态属性清单 + hex 颜色（3 条动态属性行） */
 const singleResult = {
   targetStatus: 'single',
-  suggestedName: { state: 'known', value: '白色衬衫' },
-  category: { state: 'known', value: '上衣' },
-  colors: { state: 'known', value: [{ name: '白色', isPrimary: true }] },
-  pattern: { state: 'known', value: '纯色' },
-  neckline: { state: 'unknown', value: null },
-  sleeve: { state: 'known', value: '长袖' },
-  fit: { state: 'not_applicable', value: null },
-  stylingTags: { state: 'known', value: ['通勤'] },
-  description: { state: 'known', value: '一件白色长袖衬衫。' },
+  category: '上衣',
+  suggestedName: '白色衬衫',
+  colors: [{ name: '白色', hex: '#F5F5F0', isPrimary: true }],
+  attributes: [
+    { name: '领型', value: '翻领' },
+    { name: '袖型', value: '长袖' },
+    { name: '图案', value: '纯色' },
+  ],
   unclearParts: [],
 };
 
+/** 非 single：只存诊断，不写任何属性行 */
 const diagnosticResult = {
   targetStatus: 'ambiguous',
-  suggestedName: { state: 'unknown', value: null },
-  category: { state: 'unknown', value: null },
-  colors: { state: 'unknown', value: null },
-  pattern: { state: 'unknown', value: null },
-  neckline: { state: 'unknown', value: null },
-  sleeve: { state: 'unknown', value: null },
-  fit: { state: 'unknown', value: null },
-  stylingTags: { state: 'unknown', value: null },
-  description: { state: 'unknown', value: null },
+  category: null,
+  suggestedName: null,
+  colors: [],
+  attributes: [],
   unclearParts: ['画面中有两件衣服，无法确定目标单品'],
 };
 
@@ -182,24 +178,26 @@ function aiAttributeCount(db, taskId) {
 // 测试（仅在本文件被直接运行时注册；被其他测试 require 时只导出 helper）
 // ---------------------------------------------------------------------------
 if (require.main === module) {
-  test('提交成功：写入 AI 属性，view 返回人工优先属性与上次有效结果', async () => {
+  test('提交成功：写入动态属性行，view 返回属性、颜色与上次有效结果', async () => {
   const { db, close, tasks, attributes } = await setup();
   try {
     const task = await startTask(tasks);
     assert.equal(await attributes.commitGarmentAnalysis(task.id, singleResult), 'applied');
-    assert.equal(aiAttributeCount(db, task.id), 9);
+    assert.equal(aiAttributeCount(db, task.id), 3, '只写 attributes 清单；品类/名称/颜色是内置字段不入动态行');
 
     const view = await attributes.getAnalysisView('item-a');
     assert.equal(view.latestTask.status, 'succeeded');
-    assert.equal(view.attributes.category.source, 'ai_inferred');
-    assert.deepEqual(plain(view.attributes.category.value), { state: 'known', value: '上衣' });
-    assert.deepEqual(plain(view.attributes.colors.value), {
-      state: 'known',
-      value: [{ name: '白色', isPrimary: true }],
-    });
-    assert.equal(view.attributes.neckline.value.state, 'unknown');
-    assert.equal(view.attributes.fit.value.state, 'not_applicable');
-    assert.equal(view.attributes.category.aiSuggestion, null);
+    assert.deepEqual(
+      plain(view.attributes.map((a) => a.name)),
+      ['领型', '袖型', '图案'],
+      '按品类推荐键排序',
+    );
+    assert.equal(view.attributes[0].source, 'ai_inferred');
+    assert.equal(view.attributes[0].value, '翻领');
+    assert.equal(view.colors.source, 'ai_inferred');
+    assert.deepEqual(plain(view.colors.value), [{ name: '白色', hex: '#F5F5F0', isPrimary: true }]);
+    assert.equal(view.suggestedName.value, '白色衬衫');
+    assert.equal(view.category.value, '上衣');
     assert.equal(view.lastValidResult.taskId, task.id);
     assert.equal(view.lastValidResult.modelName, 'GLM');
   } finally {
@@ -207,36 +205,40 @@ if (require.main === module) {
   }
 });
 
-test('人工值优先：人工 known 覆盖 AI，人工 unknown 不被 AI 覆盖，差异才作为建议', async () => {
-  const { close, tasks, attributes } = await setup();
+test('同名属性行取最新：用户确认覆盖 AI 显示，AI 重新分析再取最新，历史行保留', async () => {
+  const { db, close, tasks, attributes } = await setup();
   try {
-    const task = await startTask(tasks);
-    await attributes.commitGarmentAnalysis(task.id, singleResult);
+    const first = await startTask(tasks);
+    await attributes.commitGarmentAnalysis(first.id, singleResult);
 
     await attributes.recordUserAttribute({
       itemId: 'item-a',
-      field: 'category',
-      valueState: 'known',
-      value: '下装',
-      sourceRef: '详情页手动修改',
+      field: '领型',
+      value: '立领',
+      sourceType: 'user_confirmed',
+      sourceRef: '详情确认分析结果',
     });
-    await attributes.recordUserAttribute({
-      itemId: 'item-a',
-      field: 'neckline',
-      valueState: 'unknown',
-      sourceRef: '详情页手动修改',
+    let view = await attributes.getAnalysisView('item-a');
+    const confirmed = view.attributes.find((a) => a.name === '领型');
+    assert.equal(confirmed.source, 'user_confirmed');
+    assert.equal(confirmed.value, '立领');
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM attributes WHERE item_id = 'item-a' AND field = '领型'").get().n,
+      2,
+      'AI 行与用户行都保留（同名取最新展示）',
+    );
+
+    // 用户修改推进 revision 后，重新分析以新输入为准，同名再取最新
+    const second = await startTask(tasks, { requestKey: 'req-2', inputRevision: 2 });
+    await attributes.commitGarmentAnalysis(second.id, {
+      ...singleResult,
+      attributes: [{ name: '领型', value: '翻领（重拍后）' }],
     });
-
-    const view = await attributes.getAnalysisView('item-a');
-    assert.equal(view.attributes.category.source, 'user_confirmed');
-    assert.deepEqual(plain(view.attributes.category.value), { state: 'known', value: '下装' });
-    assert.equal(view.attributes.category.aiSuggestion.value, '上衣');
-
-    assert.equal(view.attributes.neckline.source, 'user_confirmed');
-    assert.equal(view.attributes.neckline.value.state, 'unknown');
-    assert.equal(view.attributes.neckline.aiSuggestion, null, '人工与 AI 都是 unknown 时不作为建议');
-
-    assert.equal(view.attributes.sleeve.source, 'ai_inferred');
+    view = await attributes.getAnalysisView('item-a');
+    const latest = view.attributes.find((a) => a.name === '领型');
+    assert.equal(latest.source, 'ai_inferred');
+    assert.equal(latest.value, '翻领（重拍后）');
+    assert.equal(view.lastValidResult.taskId, second.id);
   } finally {
     close();
   }
@@ -252,26 +254,31 @@ test('等待期间修改资料：提交判定 stale，不应用任何属性', as
     assert.equal((await tasks.getTask(task.id)).status, 'stale');
 
     const view = await attributes.getAnalysisView('item-a');
-    assert.equal(view.attributes.category.source, 'none');
+    assert.equal(view.attributes.length, 0, 'stale 结果不写任何属性行');
+    assert.equal(view.lastValidResult, null);
   } finally {
     close();
   }
 });
 
-test('最新 AI 为 unknown 时不回退旧值', async () => {
+test('颜色：用户确认行优先，否则回退当前照片最新 AI 结果', async () => {
   const { close, tasks, attributes } = await setup();
   try {
     const first = await startTask(tasks, { requestKey: 'req-1' });
     await attributes.commitGarmentAnalysis(first.id, singleResult);
 
-    const colorsUnknown = { ...singleResult, colors: { state: 'unknown', value: null } };
-    const second = await startTask(tasks, { requestKey: 'req-2' });
-    await attributes.commitGarmentAnalysis(second.id, colorsUnknown);
+    await attributes.recordUserAttribute({
+      itemId: 'item-a',
+      field: 'colors',
+      value: [{ name: '藏青', hex: '#2B3A4A', isPrimary: true }],
+      sourceType: 'user_confirmed',
+      sourceRef: '单品详情确认颜色',
+    });
 
     const view = await attributes.getAnalysisView('item-a');
-    assert.equal(view.attributes.colors.source, 'ai_inferred');
-    assert.equal(view.attributes.colors.value.state, 'unknown');
-    assert.equal(view.lastValidResult.taskId, second.id);
+    assert.equal(view.colors.source, 'user_confirmed');
+    assert.deepEqual(plain(view.colors.value), [{ name: '藏青', hex: '#2B3A4A', isPrimary: true }]);
+    assert.equal(view.lastValidResult.taskId, first.id);
   } finally {
     close();
   }
@@ -289,7 +296,7 @@ test('新任务失败保留上次成功结果，并同时暴露失败状态', as
     const view = await attributes.getAnalysisView('item-a');
     assert.equal(view.latestTask.status, 'failed');
     assert.equal(view.lastValidResult.taskId, ok.id);
-    assert.equal(view.attributes.category.value.value, '上衣');
+    assert.equal(view.attributes.find((a) => a.name === '领型').value, '翻领');
   } finally {
     close();
   }
@@ -300,15 +307,15 @@ test('照片不同不应用：提交判 stale，读取也不跨照片取旧结�
   try {
     const ok = await startTask(tasks, { requestKey: 'req-photo-1' });
     assert.equal(await attributes.commitGarmentAnalysis(ok.id, singleResult), 'applied');
-    assert.equal((await attributes.getAnalysisView('item-a')).attributes.category.source, 'ai_inferred');
+    assert.notEqual((await attributes.getAnalysisView('item-a')).lastValidResult, null);
 
     // 模拟主图被更换（本批不新增换图 UI）
     db.exec("INSERT INTO photos (id,item_id,kind,original_path,thumb_path,created_at) VALUES ('photo-b','item-a','main','photos/photo-b.jpg','thumbs/photo-b.jpg','t2')");
     db.exec("UPDATE items SET main_photo_id = 'photo-b' WHERE id = 'item-a'");
 
     const view = await attributes.getAnalysisView('item-a');
-    assert.equal(view.attributes.category.source, 'none', '当前照片没有结果时不回退旧照片推断');
-    assert.equal(view.lastValidResult, null);
+    assert.equal(view.lastValidResult, null, '当前照片没有结果时不回退旧照片推断');
+    assert.equal(view.suggestedName, null);
 
     const stale = await startTask(tasks, { requestKey: 'req-photo-2', photoId: 'photo-a' });
     assert.equal(await attributes.commitGarmentAnalysis(stale.id, singleResult), 'stale');
@@ -323,7 +330,7 @@ test('重复提交：第二次 discarded，属性不重复写入', async () => {
     const task = await startTask(tasks);
     assert.equal(await attributes.commitGarmentAnalysis(task.id, singleResult), 'applied');
     assert.equal(await attributes.commitGarmentAnalysis(task.id, singleResult), 'discarded');
-    assert.equal(aiAttributeCount(db, task.id), 9);
+    assert.equal(aiAttributeCount(db, task.id), 3);
   } finally {
     close();
   }
@@ -339,7 +346,7 @@ test('非 single 结果：任务成功但只存诊断，不写属性、不显示
     const view = await attributes.getAnalysisView('item-a');
     assert.equal(view.latestTask.status, 'succeeded');
     assert.equal(view.lastValidResult, null);
-    assert.equal(view.attributes.category.source, 'none');
+    assert.equal(view.attributes.length, 0);
   } finally {
     close();
   }
@@ -751,7 +758,7 @@ test('执行器：本地提交失败只重试提交，不重新调用模型', as
     assert.equal(ctx.analysisCalls.length, 1, '重试只提交本地结果');
     assert.equal(
       ctx.db.prepare('SELECT COUNT(*) AS n FROM attributes WHERE analysis_task_id = ?').get(task.id).n,
-      9,
+      3,
     );
   } finally {
     ctx.close();
@@ -796,6 +803,70 @@ test('执行器：enqueue 的拒绝路径与幂等', async () => {
     assert.equal(ctx.analysisCalls.length, 0, '前台未激活时只排队不调用');
   } finally {
     ctx.close();
+  }
+});
+
+test('执行器：任务领取与终态落库后触发 onTaskSettled（页面据此刷新）', async () => {
+  const ctx = await setupRunner({ config: runnerConfig });
+  seedItem(ctx.db, {});
+  try {
+    let settled = 0;
+    ctx.deps.onTaskSettled = () => {
+      settled += 1;
+    };
+    ctx.runner.setForeground(true);
+    const { task } = await ctx.runner.enqueueGarmentAnalysis({
+      itemId: 'item-a',
+      configId: 'cfg-1',
+      trigger: 'auto',
+      requestKey: 'act-settle:item-a',
+    });
+    await waitFor(async () => (await ctx.repos.tasks.getTask(task.id)).status === 'succeeded');
+    assert.ok(settled >= 2, '领取（running）与完成（succeeded）都应通知页面');
+  } finally {
+    ctx.close();
+  }
+});
+
+test('执行器：意外异常不把任务留在 running（发送前 failed，发送后 interrupted）', async () => {
+  const before = await setupRunner({ config: runnerConfig });
+  seedItem(before.db, {});
+  try {
+    before.deps.readAnalysisImage = async () => {
+      throw new Error('读取照片失败');
+    };
+    before.runner.setForeground(true);
+    const { task } = await before.runner.enqueueGarmentAnalysis({
+      itemId: 'item-a',
+      configId: 'cfg-1',
+      trigger: 'auto',
+      requestKey: 'act-err-1',
+    });
+    await waitFor(async () => (await before.repos.tasks.getTask(task.id)).status === 'failed');
+    const failedTask = await before.repos.tasks.getTask(task.id);
+    assert.equal(failedTask.errorKind, 'internal', '发送前失败不涉及计费，标 failed');
+  } finally {
+    before.close();
+  }
+
+  const after = await setupRunner({ config: runnerConfig });
+  seedItem(after.db, {});
+  try {
+    after.deps.runGarmentAnalysis = async () => {
+      throw new Error('请求发出后宿主异常');
+    };
+    after.runner.setForeground(true);
+    const { task } = await after.runner.enqueueGarmentAnalysis({
+      itemId: 'item-a',
+      configId: 'cfg-1',
+      trigger: 'auto',
+      requestKey: 'act-err-2',
+    });
+    await waitFor(async () => (await after.repos.tasks.getTask(task.id)).status === 'interrupted');
+    const interrupted = await after.repos.tasks.getTask(task.id);
+    assert.equal(interrupted.errorKind, 'internal', '发送后失败结果未知，标 interrupted 留给用户重试');
+  } finally {
+    after.close();
   }
 });
 
@@ -863,34 +934,35 @@ test('人工属性写入递增 revision，且不允许写入已删除衣物', as
     await attributes.recordUserAttribute({
       itemId: 'item-a',
       field: 'colors',
-      valueState: 'known',
-      value: [{ name: '藏青', isPrimary: true }],
+      value: [{ name: '藏青', hex: '#2B3A4A', isPrimary: true }],
+      sourceType: 'user_confirmed',
       sourceRef: '单品详情手动修改',
     });
     assert.equal((await items.getItem('item-a')).revision, 2, '用户修改应推进版本');
 
     await attributes.recordUserAttribute({
       itemId: 'item-a',
-      field: 'pattern',
-      valueState: 'not_applicable',
+      field: '图案',
+      value: '条纹',
+      sourceType: 'user_entered',
       sourceRef: '单品详情手动修改',
     });
     assert.equal((await items.getItem('item-a')).revision, 3);
 
     const view = await attributes.getAnalysisView('item-a');
-    assert.equal(view.attributes.colors.source, 'user_confirmed');
-    assert.deepEqual(plain(view.attributes.colors.value), {
-      state: 'known',
-      value: [{ name: '藏青', isPrimary: true }],
-    });
-    assert.equal(view.attributes.pattern.value.state, 'not_applicable');
+    assert.equal(view.colors.source, 'user_confirmed');
+    assert.deepEqual(plain(view.colors.value), [{ name: '藏青', hex: '#2B3A4A', isPrimary: true }]);
+    const pattern = view.attributes.find((a) => a.name === '图案');
+    assert.equal(pattern.source, 'user_entered');
+    assert.equal(pattern.value, '条纹');
 
     await items.purgeItem('item-a');
     await assert.rejects(() =>
       attributes.recordUserAttribute({
         itemId: 'item-a',
-        field: 'colors',
-        valueState: 'unknown',
+        field: '图案',
+        value: '条纹',
+        sourceType: 'user_entered',
         sourceRef: '单品详情手动修改',
       }),
     );
@@ -905,9 +977,9 @@ test('人工属性修改使在途分析结果过期（stale），不覆盖用户
     const task = await startTask(tasks); // inputRevision = 1
     await attributes.recordUserAttribute({
       itemId: 'item-a',
-      field: 'colors',
-      valueState: 'known',
-      value: [{ name: '藏青', isPrimary: true }],
+      field: '图案',
+      value: '条纹',
+      sourceType: 'user_entered',
       sourceRef: '单品详情手动修改',
     });
 
@@ -916,7 +988,7 @@ test('人工属性修改使在途分析结果过期（stale），不覆盖用户
     assert.equal(aiAttributeCount(db, task.id), 0, '过期结果不得写入任何属性');
 
     const view = await attributes.getAnalysisView('item-a');
-    assert.equal(view.attributes.colors.value.value[0].name, '藏青', '用户的值保持');
+    assert.equal(view.attributes.find((a) => a.name === '图案').value, '条纹', '用户的值保持');
   } finally {
     close();
   }
