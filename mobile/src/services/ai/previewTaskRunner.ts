@@ -169,23 +169,54 @@ export function createPreviewTaskRunner(deps: PreviewRunnerDeps): PreviewRunner 
     }
   }
 
+  /** 执行级看门狗：整个 runClaimed 超过该时长仍未落终态时，标 interrupted 并通知。
+   * 背景（2026-11-02 真机）：个别环境下 fetch abort / 内部 await 挂起，任务永停 running；
+   * 看门狗不依赖具体挂点，保证任务必达终态。生成 120s + 下载 60s + 余量 = 240s。 */
+  const EXECUTE_WATCHDOG_MS = 240000;
+
   async function execute(task: PreviewTask): Promise<void> {
-    // 兜底：任何路径都以“状态落库 + 通知”结束，绝不让任务停留在 running（与衣物分析执行器一致）
     let sent = false;
-    try {
-      await runClaimed(task, () => {
-        sent = true;
-      });
-    } catch (error) {
+    let timerFired = false;
+
+    const run = (async (): Promise<'done' | 'error'> => {
       try {
-        await deps.updateStatus(task.id, ['running'], sent ? 'interrupted' : 'failed', {
-          finishedAt: new Date().toISOString(),
-          errorKind: 'internal',
-          errorSummary: `处理意外失败：${error instanceof Error ? error.message : String(error)}`,
+        await runClaimed(task, () => {
+          sent = true;
         });
-      } catch {
-        // 兜底也失败：留给下次启动 recover()
+        return 'done';
+      } catch (error) {
+        // 意外失败：发送过 → interrupted（结果未知），未发送 → failed；不留 running
+        try {
+          await deps.updateStatus(task.id, ['running'], sent ? 'interrupted' : 'failed', {
+            finishedAt: new Date().toISOString(),
+            errorKind: 'internal',
+            errorSummary: `处理意外失败：${error instanceof Error ? error.message : String(error)}`,
+          });
+        } catch {
+          // 兜底也失败：留给下次启动 recover()
+        }
+        return 'error';
       }
+    })();
+
+    const watchdog = new Promise<'timeout'>((resolve) => {
+      setTimeout(() => {
+        timerFired = true;
+        resolve('timeout');
+      }, EXECUTE_WATCHDOG_MS);
+    });
+
+    const outcome = await Promise.race([run, watchdog]);
+    if (outcome === 'timeout') {
+      // 看门狗触发：runClaimed 仍未结束——按"发送过=结果未知"保守标 interrupted。
+      // 迟到的 run 结果再落终态时，条件更新（allowedFrom=running）会拒绝，无双写。
+      await deps
+        .updateStatus(task.id, ['running'], sent ? 'interrupted' : 'failed', {
+          finishedAt: new Date().toISOString(),
+          errorKind: 'watchdog',
+          errorSummary: `执行超过 ${Math.round(EXECUTE_WATCHDOG_MS / 1000)} 秒未完成，已按结果未知处理；可重试`,
+        })
+        .catch(() => undefined);
     }
     deps.onSettled?.();
   }

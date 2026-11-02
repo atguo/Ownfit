@@ -69,21 +69,29 @@ export function initPreviewRunner(): PreviewRunner {
         return out;
       },
       generate: async (input) => {
-        // minimaxClient 自带 120s 超时；不支持外部取消信号（见文件头边界说明）
-        void input.signal;
-        const result = await generateImage(
-          input.config,
-          input.apiKey,
-          { prompt: input.prompt, personImage: input.personDataUrl, aspectRatio: '2:3', n: 1 },
-        );
-        if (result.ok && result.imageUrls.length > 0) {
-          return { ok: true as const, imageUrl: result.imageUrls[0] };
-        }
-        return {
-          ok: false as const,
-          kind: result.error?.kind ?? 'unknown',
-          message: result.error?.message ?? '生成失败',
-        };
+        // minimaxClient 自带 120s 超时；不支持外部取消信号（见文件头边界说明）。
+        // 硬超时防线（150s）：即使客户端超时在个别 RN 环境失效，任务也必达终态，不永挂 running。
+        const HARD_TIMEOUT_MS = 150000;
+        type GenerationOutcome = { ok: true; imageUrl: string } | { ok: false; kind: string; message: string };
+        const hardTimeout = new Promise<GenerationOutcome>((resolve) => {
+          setTimeout(() => resolve({ ok: false, kind: 'timeout', message: '生成超时（150 秒硬超时）' }), HARD_TIMEOUT_MS);
+        });
+        const call = (async (): Promise<GenerationOutcome> => {
+          const result = await generateImage(
+            input.config,
+            input.apiKey,
+            { prompt: input.prompt, personImage: input.personDataUrl, aspectRatio: '2:3', n: 1 },
+          );
+          if (result.ok && result.imageUrls.length > 0) {
+            return { ok: true as const, imageUrl: result.imageUrls[0] };
+          }
+          return {
+            ok: false as const,
+            kind: result.error?.kind ?? 'unknown',
+            message: result.error?.message ?? '生成失败',
+          };
+        })();
+        return Promise.race([call, hardTimeout]);
       },
       saveResultImage: (taskId, url, prompt) =>
         import('../data/repositories/previewRepository').then((m) => m.savePreviewResultImage(taskId, url, prompt)),

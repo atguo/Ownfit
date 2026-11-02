@@ -348,9 +348,22 @@ export function updatePreviewTaskStatus(
   );
 }
 
-/** 生成图落盘：下载远程 URL → files/previews/<taskId>.jpg；记录 result_json */
+/** 生成图落盘：下载远程 URL → files/previews/<taskId>.jpg；记录 result_json。
+ * 下载带 60s 超时——URL 有时效且 CDN 偶发挂起，无超时会让任务永远停在 running。 */
+export const PREVIEW_DOWNLOAD_TIMEOUT_MS = 60000;
+
 export async function savePreviewResultImage(taskId: string, remoteUrl: string, prompt: string): Promise<string> {
-  const response = await fetch(remoteUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PREVIEW_DOWNLOAD_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(remoteUrl, { signal: controller.signal });
+  } catch (error) {
+    const aborted = error instanceof Error && error.name === 'AbortError';
+    throw new Error(aborted ? '下载生成图超时（60 秒）' : `下载生成图失败：${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(timer);
+  }
   if (!response.ok) throw new Error(`下载生成图失败：HTTP ${response.status}`);
   const bytes = await response.arrayBuffer();
   const dir = new Directory(Paths.document, 'previews');
