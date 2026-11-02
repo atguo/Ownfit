@@ -362,15 +362,15 @@ export async function savePreviewResultImage(taskId: string, remoteUrl: string, 
     setTimeout(() => reject(new Error('下载生成图超时（60 秒）')), PREVIEW_DOWNLOAD_TIMEOUT_MS);
   });
   const downloaded = await Promise.race([download, timeout]);
+  // 真机验证（2026-11-02）：下载产物已在 previews/ 目录（exists=true size>0），
+  // 但 move() 后新路径 exists 立即查为 false（move 非同步生效）——因此不再改名/移动，
+  // 直接采用下载产物的文件名作为结果（taskId 关联在任务行与 result_json 中）。
+  if (!downloaded.exists) throw new Error('生成图下载失败：文件不存在');
+  const fileName = downloaded.uri.split('/').pop() ?? `${taskId}.jpg`;
+  const relativePath = `previews/${fileName}`;
+  const placed = new File(Paths.document, relativePath);
+  if (!placed.exists || placed.size === 0) throw new Error('生成图落盘失败（下载产物不可读）');
 
-  const target = new File(dir, `${taskId}.jpg`);
-  if (target.exists) target.delete();
-  downloaded.move(target);
-  // size 为 null 表示"未知"（新 API 刚写入时可能未刷新），不能当 0 字节拒绝；只有确认存在且明确为 0 才算失败
-  if (!target.exists) throw new Error('生成图落盘失败');
-  if (target.size === 0) throw new Error('生成图落盘失败（文件为空）');
-
-  const relativePath = `previews/${taskId}.jpg`;
   const db = await getDb();
   await db.runAsync(
     'UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?',
