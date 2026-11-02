@@ -10,7 +10,7 @@ import { findProfileWith } from '../lib/config';
 import { chatCompletion } from '../lib/client';
 import { appendRecord } from '../lib/records';
 import { recommendationSystemPrompt, recommendationUserPrompt, type ProfileItem } from './prompt';
-import { checkCandidateItemIds, parseRecommendation, RECOMMENDATION_VERSION } from './schema';
+import { checkCandidateItemIds, normalizeRoles, parseRecommendation, RECOMMENDATION_VERSION } from './schema';
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -131,6 +131,7 @@ async function main() {
 
   const parsedContent = parseContent(chat.content);
   const parsed = parsedContent.ok ? parseRecommendation(parsedContent.value) : { ok: false as const, error: parsedContent.error };
+  if (parsed.ok) parsed.value = normalizeRoles(parsed.value);
   const availableIds = items.map((item) => item.id);
   const missing = parsed.ok ? checkCandidateItemIds(parsed.value, availableIds).missingItemIds : [];
 

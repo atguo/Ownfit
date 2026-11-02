@@ -15,6 +15,7 @@ export const recommendationSystemPrompt = `你是个人穿搭助理。根据用�
 规则：
 1. 只使用档案里出现过的单品 ID，绝不虚构不存在的衣物或新的属性。
 2. 组合要覆盖合理槽位（上衣/下装/连衣裙其一 + 鞋履；外套、包、配饰按需）。
+   role 只能取：top、bottom、dress、shoes、outerwear、bag、accessory（单数，不要用 bottoms）。
 3. 数据不足时不要凑数：把缺的槽位写进 gaps（例如"没有鞋履可搭"），不要用不存在的单品填补。
 4. wearStyle 只能是：自然垂放、前侧塞衣角、外层敞开穿。
 5. reason 用一句话说明搭配思路（风格/场合/颜色协调），不要下合身、保暖、显瘦等结论——

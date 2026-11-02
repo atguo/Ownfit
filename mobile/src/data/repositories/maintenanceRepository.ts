@@ -201,10 +201,12 @@ export async function exportWardrobeProfiles(): Promise<{
     "SELECT id FROM items WHERE status = 'active' ORDER BY created_at ASC",
   );
   const items: WardrobeProfileEntry[] = [];
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const view = await getAnalysisView(row.id);
     items.push({
-      id: row.id,
+      // 导出用短别名（item-1..N）：真实 id 可能是早期的选图 URI（存量数据），
+      // 不应把缓存路径喂给模型；档案内唯一即可，APP 侧接入时按序号回映真实 id。
+      id: `item-${index + 1}`,
       name: view.suggestedName?.value ?? null,
       category: view.category.value ?? null,
       attributes: view.attributes.map((a) => ({ name: a.name, value: a.value, source: a.source })),

@@ -62,6 +62,21 @@ export function parseRecommendation(value: unknown): { ok: true; value: Recommen
   return { ok: false, error: `推荐结果校验失败：${issues}` };
 }
 
+/** 模型偶发输出英文复数（bottoms/shoes 本身合法）——归一到单数枚举 */
+export function normalizeRoles(value: RecommendationResult): RecommendationResult {
+  const map: Record<string, string> = { bottoms: 'bottom', tops: 'top', dresses: 'dress', outers: 'outerwear', outer: 'outerwear', bags: 'bag', accessories: 'accessory' };
+  return {
+    ...value,
+    candidates: value.candidates.map((candidate) => ({
+      ...candidate,
+      slots: candidate.slots.map((slot) => {
+        const normalized = map[slot.role.toLowerCase()];
+        return normalized ? { ...slot, role: normalized as SlotRole } : slot;
+      }),
+    })),
+  };
+}
+
 /** 校验候选引用的单品是否存在且可用（实验内判定，APP 侧再校验可用性） */
 export function checkCandidateItemIds(
   result: RecommendationResult,
