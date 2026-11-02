@@ -366,7 +366,9 @@ export async function savePreviewResultImage(taskId: string, remoteUrl: string, 
   const target = new File(dir, `${taskId}.jpg`);
   if (target.exists) target.delete();
   downloaded.move(target);
-  if (!target.exists || (target.size ?? 0) === 0) throw new Error('生成图落盘失败');
+  // size 为 null 表示"未知"（新 API 刚写入时可能未刷新），不能当 0 字节拒绝；只有确认存在且明确为 0 才算失败
+  if (!target.exists) throw new Error('生成图落盘失败');
+  if (target.size === 0) throw new Error('生成图落盘失败（文件为空）');
 
   const relativePath = `previews/${taskId}.jpg`;
   const db = await getDb();
