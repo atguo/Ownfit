@@ -91,10 +91,11 @@ export default function TodayScreen() {
         <Icon name="sun" size={28} color={colors.weatherIcon} />
         <View style={styles.weatherText}>
           <Text style={styles.weatherMain}>
-            {context.city} {context.temp}　晴间多云
+            {context.city} {context.temp}　{context.weatherDesc}
           </Text>
           <Text style={styles.weatherSub}>
-            {context.day} · {context.scene}　天气为示例
+            {context.day} · {context.scene}
+            {context.tempSource === 'demo' ? '　天气为示例' : context.tempSource === 'manual' ? '　温度为手动填写' : ''}
           </Text>
         </View>
         <Icon name="chevron" size={15} color={colors.ink} />

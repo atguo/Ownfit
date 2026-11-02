@@ -12,6 +12,10 @@ export interface DemoContext {
   day: '今天' | '明天';
   scene: string;
   temp: string;
+  /** 天气描述（实时查得）或“手动填写”；演示态为“晴间多云（演示）” */
+  weatherDesc: string;
+  /** 温度来源：演示 / 实时 / 手动，三者可区分（天气文档 §4：手动与服务数据可区分） */
+  tempSource: 'demo' | 'real' | 'manual';
 }
 
 export interface DemoState {
@@ -22,7 +26,7 @@ export interface DemoState {
 }
 
 const initial: DemoState = {
-  context: { city: '杭州', day: '今天', scene: '日常通勤', temp: '18–24℃' },
+  context: { city: '杭州', day: '今天', scene: '日常通勤', temp: '18–24℃', weatherDesc: '晴间多云（演示）', tempSource: 'demo' },
   newUser: false,
   reference: false,
   prefs: [],
