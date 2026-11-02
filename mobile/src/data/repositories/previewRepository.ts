@@ -348,35 +348,30 @@ export function updatePreviewTaskStatus(
   );
 }
 
-/** 生成图落盘：下载远程 URL → files/previews/<taskId>.jpg；记录 result_json。
- * 下载带 60s 超时——URL 有时效且 CDN 偶发挂起，无超时会让任务永远停在 running。 */
+/** 生成图落盘：官方 downloadFileAsync 下载到 files/previews/ 再改名为 <taskId>.jpg；记录 result_json。
+ * 下载带 60s 超时——生成图 URL 有时效且 CDN 偶发挂起，无超时会让任务永远停在 running。
+ * 注：曾用 fetch+File.write(ArrayBuffer) 在真机上写入失败（落盘检查报错），故改官方下载 API。 */
 export const PREVIEW_DOWNLOAD_TIMEOUT_MS = 60000;
 
 export async function savePreviewResultImage(taskId: string, remoteUrl: string, prompt: string): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PREVIEW_DOWNLOAD_TIMEOUT_MS);
-  let response: Response;
-  try {
-    response = await fetch(remoteUrl, { signal: controller.signal });
-  } catch (error) {
-    const aborted = error instanceof Error && error.name === 'AbortError';
-    throw new Error(aborted ? '下载生成图超时（60 秒）' : `下载生成图失败：${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!response.ok) throw new Error(`下载生成图失败：HTTP ${response.status}`);
-  const bytes = await response.arrayBuffer();
   const dir = new Directory(Paths.document, 'previews');
   if (!dir.exists) dir.create();
+
+  const download = File.downloadFileAsync(remoteUrl, dir);
+  const timeout = new Promise<never>((_resolve, reject) => {
+    setTimeout(() => reject(new Error('下载生成图超时（60 秒）')), PREVIEW_DOWNLOAD_TIMEOUT_MS);
+  });
+  const downloaded = await Promise.race([download, timeout]);
+
   const target = new File(dir, `${taskId}.jpg`);
   if (target.exists) target.delete();
-  target.write(bytes);
-  const relativePath = `previews/${taskId}.jpg`;
-  if (!target.exists || target.size === 0) throw new Error('生成图落盘失败');
+  downloaded.move(target);
+  if (!target.exists || (target.size ?? 0) === 0) throw new Error('生成图落盘失败');
 
+  const relativePath = `previews/${taskId}.jpg`;
   const db = await getDb();
   await db.runAsync(
-    "UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?",
+    'UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?',
     JSON.stringify({ previewPath: relativePath, prompt }),
     new Date().toISOString(),
     taskId,
