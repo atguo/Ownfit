@@ -50,3 +50,13 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 - `app/dev/data-tools.tsx`（我的页开发入口）：扫描/清理/重建/schema 信息；清理有二次确认。
 - `data/db.ts`：初始化失败记录阶段（open/key/migrate）与详情（`getLastDbInitFailure`）；`app/_layout.tsx` 启动探测，失败进安全模式横幅（资料保持原样+重试）。
 - 照片与隐私弹层更新为真实存储/无云恢复告知。加密抽检与安全模式演练经 adb 完成；升级演练见 `node --test mobile/tests/analysisMigration.test.cjs`。回归：`node --test mobile/tests/*.test.cjs`（64 项）。
+
+
+### M5 轨 A 上身预览（2026-10-30 实现完成，真机验证进行中）
+
+- `data/repositories/previewRepository.ts`：人物参考（压缩落盘 + preferences 记录含自愈：文件在记录缺失时按 mtime 重建）；预览任务 CRUD（kind='try_on_preview'，item_id=basis、photo_id='none'，输入指纹=单品集+穿法+参考版本+配置）、`savePreviewResultImage`（下载落盘 files/previews/）。
+- `services/ai/previewTaskRunner.ts`：串行执行器（与 garmentTaskRunner 同语义：发送前写 running、启动恢复标 interrupted 不重发、异常兜底不留 running）；`services/ai/visionConfig.ts` 增 `resolveImageGenConfig`（minimax+image_gen，默认失效不静默切换）。
+- `features/previewStore.ts`（单例/入队/订阅）与 `features/sheets/PreviewSheet.tsx`（状态/结果/重试/历史与本方案标注、诚实文案）接通 outfit 页星形按钮。
+- schema v4：活动任务唯一索引改 (kind, item_id, input_key)（原来只按 item_id 会跨类型互相阻塞）。
+- preferences 共享表纪律：偏好项 id 必须 `pref-` 前缀（settingsRepository 读取/保存按前缀过滤）；其他用途（color-library、preview-reference）避开该前缀。
+- 轨 B1/B2：数据工具页导出档案 JSON；`packages/experiments/src/outfit-recommendation/`（提示词/schema/跑批）。回归：`node --test mobile/tests/*.test.cjs`（73 项）。
