@@ -28,6 +28,14 @@ function sameItems(a: string[], b: string[]): boolean {
   return key(a) === key(b);
 }
 
+/** 本地时区 yyyy-MM-dd HH:mm（finishedAt 是 UTC ISO，直接截取差 8 小时） */
+function formatLocal(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function statusLine(task: PreviewTask): string {
   switch (task.status) {
     case 'queued':
@@ -35,7 +43,7 @@ function statusLine(task: PreviewTask): string {
     case 'running':
       return '生成中…（约 1-2 分钟）';
     case 'succeeded':
-      return `生成完成 ${task.finishedAt?.slice(5, 16).replace('T', ' ') ?? ''}`;
+      return `生成完成 ${task.finishedAt ? formatLocal(task.finishedAt) : ''}`;
     case 'failed':
       return `生成失败：${task.errorSummary ?? '未知原因'}`;
     case 'interrupted':
