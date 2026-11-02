@@ -65,6 +65,13 @@ function createFsStub() {
     }
     create() {}
   }
+  // savePreviewResultImage 使用官方下载 API（M5 轨 A 修复后）
+  File.downloadFileAsync = async (url, directory) => {
+    const name = `dl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}.jpg`;
+    const target = new File(directory, name);
+    files.set(target.uri, 'downloaded-jpeg-bytes');
+    return target;
+  };
   return {
     File,
     Directory,
