@@ -12,11 +12,18 @@ import {
   ResetSheet,
 } from '../../features/sheets/ProfileSheets';
 import { setPrefs, useDemoStore } from '../../features/demoStore';
-import { getPreferences } from '../../data/repositories/settingsRepository';
+import { getBodyProfile, getPreferences, type BodyProfile } from '../../data/repositories/settingsRepository';
 import { getPreviewReference } from '../../data/repositories/previewRepository';
 import { colors, radius, type } from '../../ui/tokens';
 
 type SheetName = 'prefs' | 'reference' | 'body' | 'privacy' | 'reset' | null;
+
+function formatBodySummary(profile: BodyProfile | null): string {
+  const parts: string[] = [];
+  if (profile?.heightCm != null) parts.push(`身高 ${profile.heightCm}cm`);
+  if (profile?.weightKg != null) parts.push(`体重 ${profile.weightKg}kg`);
+  return parts.length ? parts.join(' · ') : '按需补充';
+}
 
 // 我的（原型 profile()）：头像区、长期偏好说明、设置行。
 // 长期偏好与当次意图分开呈现；页面另设开发区入口（组件展示，仅 M1 开发用）。
@@ -25,12 +32,15 @@ export default function ProfileScreen() {
   const { prefs } = useDemoStore();
   const [sheet, setSheet] = useState<SheetName>(null);
   const [referenceAt, setReferenceAt] = useState<string | null>(null);
+  const [bodySummary, setBodySummary] = useState('按需补充');
 
-  // M2：偏好来自本地数据库；M5：人物参考为真实录入（本机私有目录）
+  // M2：偏好来自本地数据库；M5：人物参考为真实录入（本机私有目录）；
+  // M6 批次 2：身材资料基础录入（身高/体重选填，只存本机）
   useFocusEffect(
     useCallback(() => {
       void getPreferences().then(setPrefs);
       void getPreviewReference().then((ref) => setReferenceAt(ref?.updatedAt ?? null));
+      void getBodyProfile().then((profile) => setBodySummary(formatBodySummary(profile)));
     }, []),
   );
 
@@ -67,7 +77,7 @@ export default function ProfileScreen() {
         value={referenceAt ? `已准备（${referenceAt.slice(0, 10)}）` : '尚未准备'}
         onPress={() => setSheet('reference')}
       />
-      <SettingRow icon="grid" title="身材资料" value="按需补充" onPress={() => setSheet('body')} />
+      <SettingRow icon="grid" title="身材资料" value={bodySummary} onPress={() => setSheet('body')} />
       <SettingRow icon="lock" title="照片与隐私" value="加密存储 · 无云备份" onPress={() => setSheet('privacy')} />
       <SettingRow
         icon="spark"

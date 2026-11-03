@@ -44,6 +44,68 @@ export async function setPreferences(values: string[]): Promise<void> {
   });
 }
 
+// 身材资料（M6 批次 2，2026-11-03 项目用户决定内测前实现基础录入）：
+// 仅身高/体重两项选填，存 preferences 表 JSON（id 避开 pref- 前缀，同 color-library/preview-reference 约定）。
+// 只存本机；仅作为 AI 推荐的体型参考织入提示词，不作合身判断、不收集围度。
+export interface BodyProfile {
+  heightCm?: number;
+  weightKg?: number;
+  updatedAt: string;
+}
+
+const BODY_PROFILE_ID = 'body-profile';
+
+function parseBodyProfile(raw: string): BodyProfile | null {
+  try {
+    const parsed = JSON.parse(raw) as BodyProfile;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const profile: BodyProfile = { updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '' };
+    if (typeof parsed.heightCm === 'number' && parsed.heightCm > 0) profile.heightCm = parsed.heightCm;
+    if (typeof parsed.weightKg === 'number' && parsed.weightKg > 0) profile.weightKg = parsed.weightKg;
+    if (!profile.heightCm && !profile.weightKg) return null;
+    return profile;
+  } catch {
+    return null;
+  }
+}
+
+export async function getBodyProfile(): Promise<BodyProfile | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    'SELECT value FROM preferences WHERE id = ?',
+    BODY_PROFILE_ID,
+  );
+  return row?.value ? parseBodyProfile(row.value) : null;
+}
+
+/** 保存身材资料；两项都为空视为清除记录（返回 null）。数值四舍五入到一位小数。 */
+export async function saveBodyProfile(
+  input: { heightCm?: number | null; weightKg?: number | null },
+): Promise<BodyProfile | null> {
+  const db = await getDb();
+  const round1 = (value: number) => Math.round(value * 10) / 10;
+  const heightCm = typeof input.heightCm === 'number' && input.heightCm > 0 ? round1(input.heightCm) : undefined;
+  const weightKg = typeof input.weightKg === 'number' && input.weightKg > 0 ? round1(input.weightKg) : undefined;
+  if (!heightCm && !weightKg) {
+    await db.runAsync('DELETE FROM preferences WHERE id = ?', BODY_PROFILE_ID);
+    return null;
+  }
+  const profile: BodyProfile = { updatedAt: new Date().toISOString() };
+  if (heightCm) profile.heightCm = heightCm;
+  if (weightKg) profile.weightKg = weightKg;
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO preferences (id, value, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    BODY_PROFILE_ID,
+    JSON.stringify(profile),
+    'user_selected',
+    now,
+    now,
+  );
+  return profile;
+}
+
 export async function getSceneDefault(): Promise<SceneDefault | null> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ city: string; day: '今天' | '明天'; scene: string }>(

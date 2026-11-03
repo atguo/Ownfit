@@ -2,6 +2,7 @@
 // - loadSceneSnapshot 读当次 context（演示温度不进 AI；实时/手动温度带来源）
 // - 入队持久化输入快照（场景 + 锁定别名），执行器按快照发送，不现读会话
 // - 采用候选保留 AI 来源与理由（buildContractPlan source/reason；planRepository 落库）
+// M6 批次 2 补充：身材资料（身高/体重选填）随入队快照进指纹与提示词，脏字段消毒。
 // 使用内存 SQLite 与真实 store/runner/service/仓库代码；不调用真实模型。
 // 运行：仓库根 `node --test mobile/tests/recommendationInputs.test.cjs`
 
@@ -235,9 +236,11 @@ test('入队：锁定真实单品映射为别名，输入快照与指纹持久�
       temp: '10–15℃',
       tempSource: 'real',
     });
+    assert.equal(snapshot.body, null); // 未填写身材资料
     const inputKey = JSON.parse(row.input_key);
     assert.deepEqual(inputKey.lockedAliases, ['item-2']);
-    assert.equal(inputKey.promptVersion, '2');
+    assert.equal(inputKey.body, null);
+    assert.equal(inputKey.promptVersion, '3');
 
     const again = await store.enqueueRecommendation({
       scene: { city: '北京', day: '今天', scene: '约会', temp: '10–15℃', tempSource: 'real' },
@@ -245,6 +248,41 @@ test('入队：锁定真实单品映射为别名，输入快照与指纹持久�
       configId: 'cfg-1',
     });
     assert.equal(again.status, 'existing');
+  } finally {
+    close();
+  }
+});
+
+test('入队：身材资料进快照与指纹，数值变化视为新输入（M6 批次 2）', async () => {
+  const { db, close, store } = await loadStore();
+  try {
+    seedItem(db, 'item-real-1', '上衣');
+    seedItem(db, 'item-real-2', '下装');
+    seedItem(db, 'item-real-3', '鞋履');
+    db.prepare(
+      "INSERT INTO preferences (id, value, source, created_at, updated_at) VALUES ('body-profile', ?, 'user_selected', 't0', 't0')",
+    ).run('{"heightCm":170,"weightKg":60,"updatedAt":"t0"}');
+    const scene = { city: '北京', day: '今天', scene: '约会' };
+
+    const first = await store.enqueueRecommendation({ scene, configId: 'cfg-1' });
+    assert.equal(first.status, 'created');
+    const row = db
+      .prepare("SELECT input_json, input_key FROM tasks WHERE kind = 'outfit_recommendation'")
+      .get();
+    assert.deepEqual(JSON.parse(row.input_json).body, { heightCm: 170, weightKg: 60 });
+    assert.deepEqual(JSON.parse(row.input_key).body, { heightCm: 170, weightKg: 60 });
+
+    // 身材变化 → 新输入，不与旧任务去重
+    db.prepare("UPDATE preferences SET value = ? WHERE id = 'body-profile'").run(
+      '{"heightCm":172,"updatedAt":"t1"}',
+    );
+    const second = await store.enqueueRecommendation({ scene, configId: 'cfg-1' });
+    assert.equal(second.status, 'created');
+
+    // 清除身材资料 → 又是另一种输入
+    db.prepare("DELETE FROM preferences WHERE id = 'body-profile'").run();
+    const third = await store.enqueueRecommendation({ scene, configId: 'cfg-1' });
+    assert.equal(third.status, 'created');
   } finally {
     close();
   }
@@ -375,6 +413,7 @@ test('执行器（快照优先与回退；锁定行与温度来源进提示词�
     assert.match(userPrompt, /温度=10–15℃（实时天气）/);
     assert.match(userPrompt, /已锁定的单品（候选组合必须包含）：item-2$/m);
     assert.doesNotMatch(userPrompt, /item-x/);
+    assert.doesNotMatch(userPrompt, /身材资料/);
     assert.equal(calls.loadSceneCalls, 0);
     // 候选已回映真实单品 ID，理由保留
     assert.deepEqual(plain(calls.commits[0].result.candidates[0].slots.map((s) => s.itemId)), [
@@ -390,6 +429,21 @@ test('执行器（快照优先与回退；锁定行与温度来源进提示词�
     assert.equal(calls.loadSceneCalls, 1);
     assert.match(chatArg[1].content, /城市=上海/);
     assert.doesNotMatch(chatArg[1].content, /已锁定的单品/);
+  }
+
+  // 身材资料快照进提示词；脏字段消毒（非数值身高被剔除，M6 批次 2）
+  {
+    const { chatArg, calls } = await run({
+      inputJson: JSON.stringify({
+        scene: { city: '北京', day: '明天', scene: '约会' },
+        body: { heightCm: 'tall', weightKg: 60 },
+      }),
+    });
+    assert.equal(calls.updates.at(-1).to, 'succeeded');
+    const userPrompt = chatArg[1].content;
+    assert.match(userPrompt, /体重=60kg/);
+    assert.doesNotMatch(userPrompt, /身高=/);
+    assert.doesNotMatch(userPrompt, /tall/);
   }
 });
 
@@ -412,6 +466,23 @@ test('提示词与输入指纹（纯函数）：温度来源与锁定集呈现',
   });
   assert.doesNotMatch(plain, /温度=/);
   assert.doesNotMatch(plain, /已锁定的单品/);
+  assert.doesNotMatch(plain, /身材资料/);
+
+  // 身材资料行：有有效数值才输出，明确不下合身结论（M6 批次 2）
+  const withBody = service.recommendationUserPrompt({
+    items: [],
+    scene: { city: '杭州', day: '今天', scene: '通勤' },
+    body: { heightCm: 170, weightKg: 60 },
+  });
+  assert.match(withBody, /身材资料（选填，仅作体型参考，不要给出合身结论）：身高=170cm，体重=60kg/);
+
+  const zeroHeight = service.recommendationUserPrompt({
+    items: [],
+    scene: { city: '杭州', day: '今天', scene: '通勤' },
+    body: { heightCm: 0, weightKg: 60 },
+  });
+  assert.doesNotMatch(zeroHeight, /身高=/);
+  assert.match(zeroHeight, /体重=60kg/);
 
   const key = JSON.parse(
     service.buildRecommendationInputKey({
@@ -424,6 +495,20 @@ test('提示词与输入指纹（纯函数）：温度来源与锁定集呈现',
   );
   assert.deepEqual(key.itemIds, ['item-1', 'item-2']);
   assert.deepEqual(key.lockedAliases, ['item-1', 'item-2']);
+
+  // 指纹：身材数值变化与缺失互相视为不同输入
+  const sceneKey = { city: '杭州', day: '今天', scene: '通勤' };
+  const keyBodyA = service.buildRecommendationInputKey({
+    aliasItemIds: ['item-1'], scene: sceneKey, body: { heightCm: 170 }, configId: 'c', configRevision: 'r',
+  });
+  const keyBodyB = service.buildRecommendationInputKey({
+    aliasItemIds: ['item-1'], scene: sceneKey, body: { heightCm: 172 }, configId: 'c', configRevision: 'r',
+  });
+  const keyNoBody = service.buildRecommendationInputKey({
+    aliasItemIds: ['item-1'], scene: sceneKey, body: null, configId: 'c', configRevision: 'r',
+  });
+  assert.notEqual(keyBodyA, keyBodyB);
+  assert.notEqual(keyBodyA, keyNoBody);
 });
 
 /** 会话直连（react 与数据库边界 stub，同 outfitSession.test.cjs） */

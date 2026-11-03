@@ -39,3 +39,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# release 签名材料（keystore 与密码不入库，见 keystores/README.md）
+/keystores/*
+!/keystores/README.md

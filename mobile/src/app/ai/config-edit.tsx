@@ -18,6 +18,7 @@ import {
 import { testConnection } from '../../services/ai/testConnection';
 import {
   capabilityLabels,
+  insecureUrlProblem,
   urlKindLabels,
   type AiCapability,
   type ModelConfig,
@@ -101,7 +102,9 @@ export default function AiConfigEditScreen() {
   function validate(): string | null {
     if (!name.trim()) return '请填写名称';
     if (!baseUrl.trim()) return '请填写服务地址';
-    if (!/^https?:\/\//i.test(baseUrl.trim())) return '服务地址需以 http:// 或 https:// 开头';
+    // 明文收敛（M6 批次 2）：服务地址只接受 https
+    const insecure = insecureUrlProblem(baseUrl);
+    if (insecure) return insecure;
     if (isMinimax && !/\/[a-z]/i.test(baseUrl.trim().replace(/^https?:\/\//i, ''))) {
       return '图像服务需填写完整接口地址（含路径，如 /v1/image_generation）';
     }

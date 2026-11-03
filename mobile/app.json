@@ -2,7 +2,7 @@
   "expo": {
     "name": "衣见",
     "slug": "ownfit",
-    "version": "0.1.0",
+    "version": "0.6.0-beta1",
     "scheme": "ownfit",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "com.atguo.ownfit",
-      "usesCleartextTraffic": true,
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -26,6 +26,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withReleaseSigning",
       [
         "expo-build-properties",
         {

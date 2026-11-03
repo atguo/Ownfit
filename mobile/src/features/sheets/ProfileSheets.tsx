@@ -5,9 +5,16 @@ import { Sheet } from '../../ui/components/Sheet';
 import { ChoiceRow } from '../../ui/components/Rows';
 import { Notice } from '../../ui/components/Basics';
 import { Button } from '../../ui/components/Button';
+import { Field, TextField } from '../../ui/components/Field';
 import { useToast } from '../../ui/components/Toast';
 import { colors, type } from '../../ui/tokens';
-import { getPreferences, saveSceneDefault, setPreferences } from '../../data/repositories/settingsRepository';
+import {
+  getBodyProfile,
+  getPreferences,
+  saveBodyProfile,
+  saveSceneDefault,
+  setPreferences,
+} from '../../data/repositories/settingsRepository';
 import {
   getPreviewReference,
   removePreviewReference,
@@ -146,14 +153,83 @@ export function ReferenceSheet({ visible, onClose }: { visible: boolean; onClose
   );
 }
 
+// 身材资料（M6 批次 2，2026-11-03 项目用户决定内测前实现基础录入）：
+// 身高/体重选填，只存本机；AI 推荐时作为体型参考织入提示词（不下合身结论）。
+// 围度等更多信息暂不收集，照片估计不冒充实测的原则不变。
 export function BodySheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const toast = useToast();
+  const [height, setHeight] = useState('');
+  const [weight, setWeight] = useState('');
+  const [hasSaved, setHasSaved] = useState(false);
+
+  useEffect(() => {
+    if (visible) {
+      void getBodyProfile().then((profile) => {
+        setHeight(profile?.heightCm != null ? String(profile.heightCm) : '');
+        setWeight(profile?.weightKg != null ? String(profile.weightKg) : '');
+        setHasSaved(!!profile);
+      });
+    }
+  }, [visible]);
+
+  /** 解析输入；空值放行，非法/越界返回提示文案 */
+  function parseInput(): { heightCm?: number; weightKg?: number } | string {
+    const parse = (text: string, min: number, max: number, label: string): number | string | null => {
+      const trimmed = text.trim();
+      if (!trimmed) return null;
+      const value = Number(trimmed);
+      if (!Number.isFinite(value) || value < min || value > max) {
+        return `${label}需在 ${min}–${max} 之间`;
+      }
+      return value;
+    };
+    const heightCm = parse(height, 50, 250, '身高（cm）');
+    if (typeof heightCm === 'string') return heightCm;
+    const weightKg = parse(weight, 20, 300, '体重（kg）');
+    if (typeof weightKg === 'string') return weightKg;
+    const result: { heightCm?: number; weightKg?: number } = {};
+    if (heightCm != null) result.heightCm = heightCm;
+    if (weightKg != null) result.weightKg = weightKg;
+    return result;
+  }
+
+  async function save() {
+    const parsed = parseInput();
+    if (typeof parsed === 'string') {
+      toast(parsed);
+      return;
+    }
+    const saved = await saveBodyProfile(parsed);
+    setHasSaved(!!saved);
+    onClose();
+    toast(saved ? '身材资料已保存，只存本机' : '已清除身材资料');
+  }
+
+  async function clearProfile() {
+    await saveBodyProfile({ heightCm: null, weightKg: null });
+    setHeight('');
+    setWeight('');
+    setHasSaved(false);
+    toast('已清除身材资料');
+  }
+
   return (
     <Sheet visible={visible} title="用到时，再补充。" onClose={onClose}>
       <Text style={styles.description}>
-        衣橱录入不要求身高、体重或围度。本演示未接入合身判断，不收集这些数据。
+        身高、体重选填，只存本机；AI 推荐时作为体型参考。不收集围度，也不会用照片估计冒充实测。
       </Text>
-      <Notice>真实功能会在判断对应部位时说明需要什么资料，照片估计不会冒充实测。</Notice>
-      <Button variant="primary" label="知道了" onPress={onClose} />
+      <Field label="身高（cm，选填）">
+        <TextField value={height} onChangeText={setHeight} placeholder="例如 170" keyboardType="numeric" />
+      </Field>
+      <Field label="体重（kg，选填）">
+        <TextField value={weight} onChangeText={setWeight} placeholder="例如 60" keyboardType="numeric" />
+      </Field>
+      {hasSaved ? <Notice>已保存。推荐会把它作为体型参考，但不会给出合身结论。</Notice> : null}
+      <Button variant="primary" label="保存" onPress={() => void save()} style={styles.done} />
+      {hasSaved ? (
+        <Button variant="text" label="清除身材资料" onPress={() => void clearProfile()} style={styles.full} />
+      ) : null}
+      <Button variant="text" label="返回" onPress={onClose} />
     </Sheet>
   );
 }

@@ -2,6 +2,7 @@
 // - openai：基础地址（填到版本号为止）自动拼接 /chat/completions
 // - minimax：完整接口地址直填、不再自动拼接——自动补路径会把
 //   https://api.minimax.cn/v1 变成 /v1/v1/image_generation（真机 404 实证）
+// M6 批次 2 补充回归：明文收敛——服务地址仅接受 https（insecureUrlProblem）。
 // 运行：仓库根 `node --test mobile/tests/endpoint.test.cjs`
 
 const { test } = require('node:test');
@@ -23,7 +24,7 @@ vm.runInNewContext(js, {
     throw new Error(`Unexpected dependency: ${id}`);
   },
 }, { filename: 'types.ts' });
-const { endpointFor } = mod.exports;
+const { endpointFor, insecureUrlProblem } = mod.exports;
 
 test('openai：基础地址自动拼接 /chat/completions，容忍结尾斜杠', () => {
   assert.equal(endpointFor('openai', 'https://api.example.com/v1'), 'https://api.example.com/v1/chat/completions');
@@ -34,4 +35,13 @@ test('minimax：完整接口地址直填，不追加任何路径', () => {
   assert.equal(endpointFor('minimax', 'https://api.minimax.cn/v1/image_generation'), 'https://api.minimax.cn/v1/image_generation');
   assert.equal(endpointFor('minimax', 'https://api.minimax.cn/v1/image_generation/'), 'https://api.minimax.cn/v1/image_generation');
   assert.equal(endpointFor('minimax', 'https://self-hosted.lan:8000/custom/path'), 'https://self-hosted.lan:8000/custom/path');
+});
+
+test('明文收敛：服务地址仅接受 https（M6 批次 2）', () => {
+  assert.equal(insecureUrlProblem('https://api.example.com/v1'), null);
+  assert.equal(insecureUrlProblem('HTTPS://api.example.com/v1/image_generation'), null);
+  assert.match(insecureUrlProblem('http://192.168.1.10:8000/v1'), /https/);
+  assert.match(insecureUrlProblem('ftp://example.com'), /https/);
+  assert.match(insecureUrlProblem('api.example.com/v1'), /https/);
+  assert.equal(insecureUrlProblem('   '), null); // 空值交由必填校验处理
 });

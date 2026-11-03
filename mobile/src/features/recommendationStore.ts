@@ -18,7 +18,7 @@ import {
   RECOMMENDATION_TASK_KIND,
   updateRecommendationTaskStatus,
 } from '../data/repositories/recommendationRepository';
-import { getSceneDefault, getPreferences } from '../data/repositories/settingsRepository';
+import { getBodyProfile, getSceneDefault, getPreferences } from '../data/repositories/settingsRepository';
 import { getDefaultConfigId, setDefaultConfigId } from '../data/repositories/taskRepository';
 import { getContextSnapshot } from './demoStore';
 import { getDb } from '../data/db';
@@ -46,12 +46,13 @@ export async function loadWardrobeProfile(): Promise<{ items: ProfileItem[]; idB
   const items: ProfileItem[] = [];
   const idByAlias = new Map<string, string>();
   for (const [index, row] of rows.entries()) {
-    const view = await getAnalysisView(row.id);
+    const [view, item] = await Promise.all([getAnalysisView(row.id), getItem(row.id)]);
     const alias = `item-${index + 1}`;
     idByAlias.set(alias, row.id);
     items.push({
       id: alias,
-      name: view.suggestedName?.value ?? null,
+      // A1：用户实际名称优先于 AI 名称建议（建议稿 B3；AI 建议仅在用户未命名时使用）
+      name: item?.name ?? view.suggestedName?.value ?? null,
       category: view.category.value ?? null,
       attributes: view.attributes.map((a) => ({ name: a.name, value: a.value })),
       colors: view.colors.value.map((c) => ({ name: c.name, hex: c.hex })),
@@ -64,6 +65,7 @@ export async function loadWardrobeProfile(): Promise<{ items: ProfileItem[]; idB
  * 当次场景快照（M6 批次 1.2）：读首页当次 context（启动时由长期默认播种、
  * SceneSheet 当次修改直接生效），不再只读长期默认。
  * 温度只在来源为实时天气/手动填写时带上——演示温度（tempSource='demo'）不进 AI 输入。
+ * B6：实时天气带天气描述（晴/雨/雪等，参与选择）；手动温度无描述不编造。
  */
 export async function loadSceneSnapshot(): Promise<{
   city: string;
@@ -71,6 +73,7 @@ export async function loadSceneSnapshot(): Promise<{
   scene: string;
   temp?: string;
   tempSource?: string;
+  weatherDesc?: string;
 }> {
   const context = getContextSnapshot();
   const prefs = await getPreferences();
@@ -82,6 +85,7 @@ export async function loadSceneSnapshot(): Promise<{
     ...(context.tempSource === 'real' || context.tempSource === 'manual'
       ? { temp: context.temp, tempSource: context.tempSource }
       : null),
+    ...(context.tempSource === 'real' && context.weatherDesc ? { weatherDesc: context.weatherDesc } : null),
   };
 }
 
@@ -119,9 +123,11 @@ export async function rememberDefaultRecommendationConfig(configId: string): Pro
 }
 
 export interface EnqueueRecommendationInput {
-  scene: { city: string; day: string; scene: string; temp?: string; tempSource?: string };
+  scene: { city: string; day: string; scene: string; temp?: string; tempSource?: string; weatherDesc?: string };
   /** 当前搭配会话中已锁定的真实单品 ID（映射为别名进提示词与快照；可省略） */
   lockedItemIds?: string[];
+  /** 当次要求（选填，如"只换鞋""更正式一点"）；仅本次请求有效（B1） */
+  note?: string | null;
   /** 已就绪（ready）或用户已选定的文本配置 ID */
   configId: string;
 }
@@ -144,10 +150,24 @@ export async function enqueueRecommendation(
   const lockedAliases = (input.lockedItemIds ?? [])
     .map((realId) => aliasByRealId.get(realId))
     .filter((alias): alias is string => !!alias);
+  // 身材资料随入队快照（M6 批次 2）：指纹与执行时发送内容保持一致
+  const bodyProfile = await getBodyProfile();
+  const body = bodyProfile
+    ? {
+        ...(bodyProfile.heightCm != null ? { heightCm: bodyProfile.heightCm } : null),
+        ...(bodyProfile.weightKg != null ? { weightKg: bodyProfile.weightKg } : null),
+      }
+    : null;
+  // B1：长期偏好与当次要求随入队快照（执行时按快照发送；长期偏好全部参与排序）
+  const preferences = await getPreferences();
+  const note = input.note?.trim() ? input.note.trim().slice(0, 120) : null;
   const inputKey = buildRecommendationInputKey({
     aliasItemIds: items.map((item) => item.id),
     scene: input.scene,
+    body,
     lockedAliases,
+    preferences,
+    note,
     configId: config.id,
     configRevision: callRevisionOf(config),
   });
@@ -164,8 +184,8 @@ export async function enqueueRecommendation(
       modelId: config.modelId,
     }),
     configRevision: callRevisionOf(config),
-    // 入队快照：执行时按此发送，不现读会话状态（场景/锁定可能已变化）
-    inputJson: JSON.stringify({ scene: input.scene, lockedAliases }),
+    // 入队快照：执行时按此发送，不现读会话状态（场景/锁定/身材/偏好可能已变化）
+    inputJson: JSON.stringify({ scene: input.scene, lockedAliases, body, preferences, note }),
   });
   notifyRecommendationChanged();
   return result;

@@ -2,13 +2,14 @@
 
 ## 当前结构（2026-11-03 核对，M6 批次 1 后更新）
 
-M0–M5 完成（M5 视同验收）；M6 进行中，批次 1（M5 登记缺口收尾）已实现，真机走查待项目用户执行，详见 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md)。下文带日期记录保留历史语境，不以历史“0 次调用/待验收”覆盖后续证据。
+M0–M5 完成（M5 视同验收）；M6 进行中：批次 1（M5 登记缺口收尾）已实现并经项目用户真机走查通过（2026-11-03）；批次 2 五项 M6 前决定已确认并落地，批次 3 本地部分（签名插件、版本号）完成，keystore 生成/构建/验签待构建机。详见 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md)。下文带日期记录保留历史语境，不以历史“0 次调用/待验收”覆盖后续证据。
 
 - `src/app/`：根 Stack + `(tabs)/` 四主入口 + `choose`、`outfit`、`add` + `ai/config`、`ai/config-edit` + `dev/components`、`dev/data-tools`。预览为 `PreviewSheet` 弹层，当前没有独立 `preview.tsx` 路由。
 - `src/ui/`：设计令牌、图标、响应式页面容器与原生组件，真实搭配板为 `RealOutfitBoard`。
-- `src/data/`：SQLCipher schema v6、密钥管理与 user_version 迁移；repositories 包含衣物/照片/属性/方案/分析任务/预览/推荐/维护/设置/颜色库。照片、人物参考和生成图保存在应用私有目录。
-- `src/services/`：AI 配置、协议客户端及分析/预览/推荐执行器；`weather.ts` 提供可选城市天气查询。非敏感 AI 配置存本地库 `ai_configs` 表（v6，DB 为源 + 内存镜像），API Key 仍只在设备安全存储。
-- `src/features/`：`outfitSession` 编辑会话（含会话来源 origin：manual/ai），分析/预览/推荐 store，`sheets/` 原生弹层。`demoStore` 承载当次场景等内存上下文；推荐已消费该当次场景（含温度来源区分，演示温度不进 AI）。
+- `src/data/`：SQLCipher schema v6、密钥管理与 user_version 迁移；repositories 包含衣物/照片/属性/方案/分析任务/预览/推荐/维护/设置（含长期偏好、场景默认、身材资料 body-profile）/颜色库。照片、人物参考和生成图保存在应用私有目录。
+- `src/services/`：AI 配置、协议客户端及分析/预览/推荐执行器；`weather.ts` 提供可选城市天气查询，`location.ts` 提供定位。非敏感 AI 配置存本地库 `ai_configs` 表（v6，DB 为源 + 内存镜像），API Key 仍只在设备安全存储；服务地址仅接受 https（M6 批次 2 明文收敛）。
+- `src/features/`：`outfitSession` 编辑会话（含会话来源 origin：manual/ai），分析/预览/推荐 store，`weatherAuto` 自动天气编排，`sheets/` 原生弹层。`demoStore` 承载当次场景等内存上下文；推荐已消费该当次场景（含温度来源区分，演示温度不进 AI）。
+- `plugins/`：Expo 配置插件（`withReleaseSigning.js` 注入 release 正式签名，经 prebuild 生效）；`keystores/`（git 忽略，README 入库）存放构建机本机的签名材料。
 
 ## 命令
 
@@ -63,7 +64,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 - preferences 共享表纪律：偏好项 id 必须 `pref-` 前缀（settingsRepository 读取/保存按前缀过滤）；其他用途（color-library、preview-reference）避开该前缀。
 - 轨 B1/B2：数据工具页导出档案 JSON；`packages/experiments/src/outfit-recommendation/`（提示词/schema/跑批）。回归：`node --test mobile/tests/*.test.cjs`（73 项）。
 
-### M6 批次 1：M5 登记缺口收尾（2026-11-03 实现完成，待真机走查）
+### M6 批次 1：M5 登记缺口收尾（2026-11-03 实现完成，同日项目用户真机走查通过）
 
 依据 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md) 批次 1 落地四项：
 
@@ -74,4 +75,28 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 - **1.5 MiniMax 图像地址改完整地址直填**（2026-11-03 项目用户确认）：`endpointFor('minimax')` 返回用户输入的完整接口地址（不追加路径；原"基础地址自动拼 `/v1/image_generation`"会把 `/v1` 结尾的地址拼成 `/v1/v1/...` 404）；OpenAI 兼容仍自动拼 `/chat/completions`；配置表单按类型区分标签、占位与校验（minimax 要求含路径的完整地址）。回归：`endpoint.test.cjs` 2 项。**已有 MiniMax 配置需在 APP 内重新编辑为完整地址。**
 - **1.6 天气定位为主、手动为辅；打开 APP 自动查询**（2026-11-03 项目用户确认，实现功能文档"授权位置或手动选择"）：新增 `expo-location`（原生依赖，dev client 需重装）。`services/location.ts`：先取 10 分钟内缓存位置（秒出），无缓存再实定位（单次 15 秒、失败退避 2 秒重试一次——冷启动首修慢是真机超时主因）；权限未决定弹一次系统授权，拒绝后不重复打扰；坐标降 4 位小数按坐标直查 open-meteo（`fetchTodayWeatherByCoords`）；城市名解析链=平台逆地理 → BigDataCloud 免 Key 客户端接口（国行无 GMS 时平台逆地理常不可用）→ 失败降级"当前位置"占位。`features/weatherAuto.ts`：启动与回前台自动定位+查天气并写入当次 context（首页天气条直接实时），2 小时/跨日过期自动重查，并发防重入，失败保持占位不打扰；SceneSheet 与启动流程共用同一条链路（弹层内明示坐标用途，手动改城市按城市名查询）。回归：`location.test.cjs` 9 项 + `weatherAuto.test.cjs` 8 项 + weather 坐标用例。
 - 回归：`recommendationInputs.test.cjs`（6 项）与 `configMigration.test.cjs`（6 项）新增；既有用例随 v5/v6 与配置语义更新（迁移断言至 v6、路由测试补 ensureConfigCache、损坏旧文件按 missing）。`pnpm typecheck`、契约样例（7+15 组）通过。
-- **未验证边界**：真机走查待项目用户执行（旧 JSON 迁移、推荐带当次场景/锁定、天气失效表达、采用保存来源显示）。
+- **未验证边界**：真机走查经项目用户 2026-11-03 确认通过（旧 JSON 迁移、推荐带当次场景/锁定、天气失效表达与定位、采用保存来源显示、MiniMax 完整地址生成），批次 1 收口；端到端质量结论随批次 4 验证报告登记。
+
+### M6 批次 2 决定落地与批次 3 本地部分（2026-11-03 项目用户确认，2026-11-04 实现）
+
+五项 M6 前决定（详见 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md) 批次 2）：APK 直接分发；导出/备份本期不做；内测包禁明文；人体尺寸内测前实现基础录入；生成正式 keystore。
+
+**身材资料基础录入**（归属[个人资料管理](../docs/functions/个人资料管理.md)）：
+
+- `settingsRepository` 增 `BodyProfile`（`{heightCm?, weightKg?, updatedAt}`）与 `getBodyProfile`/`saveBodyProfile`：存 preferences 表 JSON（id=`body-profile`，避开 `pref-` 前缀纪律），数值一位小数规整、非正数拒存，两项全空视为清除记录（删行）；损坏/非法记录按"未填写"返回 null 不抛错。
+- `ProfileSheets.BodySheet` 由说明页改为真实录入：身高 50–250cm、体重 20–300kg 选填，可清除记录；`(tabs)/profile.tsx` 行值显示"身高 Xcm · 体重 Ykg"。
+- 推荐链路：`recommendationUserPrompt` 增 `body` 参数（输出"用户身材资料（选填，仅作体型参考，不要给出合身结论）：身高=…，体重=…"），`RECOMMENDATION_PROMPT_VERSION` 升 **v3**；`buildRecommendationInputKey` 纳入 body（数值变化视为新输入）；`enqueueRecommendation` 读取 body-profile 随入队快照（`input_json.body`）与指纹持久化；执行器 `sanitizeBody` 只放行正数值字段，脏数据不进提示词。
+
+**明文收敛**（归属[AI模型配置与接入](../docs/functions/AI模型配置与接入.md)）：
+
+- `app.json` 移除 `android.usesCleartextTraffic`（Android 默认禁明文）；`types.insecureUrlProblem(baseUrl)` 纯函数校验（https 放行、空值交必填校验），`ai/config-edit.tsx` 保存与测试前拒绝 `http://`。自部署模型需 https 或反向代理；旧 http 配置调用时被系统拦截需重新编辑。
+
+**release 签名与版本号**：
+
+- 新增 `plugins/withReleaseSigning.js`（Expo 配置插件，`expo/config-plugins` 的 `withAppBuildGradle`）：向 `android/app/build.gradle` 注入 `ownfitReleaseSigning`（读 `keystores/keystore.properties` 的 storeFile/storePassword/keyAlias/keyPassword），仅替换 release 块的 signingConfig；幂等，模板标记缺失时告警并保持原样（不阻断 prebuild）；properties 缺失时 release 退回 debug 签名。
+- `keystores/`：keystore 与 properties 被 git 忽略（`/keystores/*` + 全局 `*.jks`），`keystores/README.md` 入库——keytool 生成命令、properties 模板（路径用绝对路径正斜杠）、prebuild 后 grep 核验、apksigner 验签、保管约定（丢失无法覆盖升级）。
+- `app.json`：version=**0.6.0-beta1**、android.versionCode=**1**；约定每分发一包 versionCode+1。
+
+验证：mobile 回归 **117/117**（新增 `bodyProfile.test.cjs` 3 项：存取/清除/损坏记录、前缀纪律；`endpoint.test.cjs` 增 https 校验；`recommendationInputs.test.cjs` 增身材入队快照与指纹、提示词身材段、执行器消毒断言，promptVersion 断言更新 v3）；契约样例 7+15 组通过；`pnpm typecheck` 通过——顺带修复 `src/ui/screen.tsx`→`Screen.tsx`（TS 6 强制一致命名报错；11 处导入均为 `Screen`，改名跟随导入侧与 Icon/PageTop 组件命名惯例）。本机 `expo prebuild -p android` 核验：`ownfitReleaseSigning` 注入 3 处、manifest 无 `usesCleartextTraffic`、版本号生效。
+
+**未验证边界**：身材录入 UI 与提示词实际效果未真机走查；keystore 生成、`assembleRelease`、apksigner 验签与 release 真机启动验证须在构建机执行（当前开发机无 Android 工具链）；明文拦截的运行时错误表现未实测。完成前不宣称内测候选包就绪。

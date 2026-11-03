@@ -41,7 +41,14 @@ export interface RecommendationRunnerDeps {
   /** 读取当前衣物档案（已入库单品，别名 → 真实 id 映射一并返回） */
   loadProfile(): Promise<{ items: ProfileItem[]; idByAlias: Map<string, string> }>;
   /** 当次场景快照（仅旧任务无入队快照时兜底使用） */
-  loadScene(): Promise<{ city: string; day: string; scene: string; temp?: string; tempSource?: string }>;
+  loadScene(): Promise<{
+    city: string;
+    day: string;
+    scene: string;
+    temp?: string;
+    tempSource?: string;
+    weatherDesc?: string;
+  }>;
   /** 候选落库（succeeded 提交） */
   commitResult(
     taskId: string,
@@ -64,8 +71,14 @@ const UNKNOWN_OUTCOME_KINDS: readonly string[] = ['timeout', 'network', 'cancell
 
 /** 入队时持久化的输入快照（schema v5 起）；损坏视为无快照，回退现读场景 */
 interface StoredRecommendationInput {
-  scene?: { city: string; day: string; scene: string; temp?: string; tempSource?: string };
+  scene?: { city: string; day: string; scene: string; temp?: string; tempSource?: string; weatherDesc?: string };
   lockedAliases?: string[];
+  /** 身材资料（M6 批次 2）；旧任务无此字段，仅接受数值防脏数据进提示词 */
+  body?: { heightCm?: number; weightKg?: number } | null;
+  /** 长期偏好（B1：全部参与排序）；消毒后进提示词 */
+  preferences?: string[];
+  /** 当次要求（B1）；消毒后进提示词，仅本次有效 */
+  note?: string | null;
 }
 
 function parseStoredInput(inputJson: string | null): StoredRecommendationInput | null {
@@ -78,6 +91,33 @@ function parseStoredInput(inputJson: string | null): StoredRecommendationInput |
   } catch {
     return null;
   }
+}
+
+/** 快照身材资料消毒：只保留正数值字段，脏数据不进提示词 */
+function sanitizeBody(input?: { heightCm?: number; weightKg?: number } | null): {
+  heightCm?: number;
+  weightKg?: number;
+} | null {
+  if (!input || typeof input !== 'object') return null;
+  const body: { heightCm?: number; weightKg?: number } = {};
+  if (typeof input.heightCm === 'number' && input.heightCm > 0) body.heightCm = input.heightCm;
+  if (typeof input.weightKg === 'number' && input.weightKg > 0) body.weightKg = input.weightKg;
+  return body.heightCm || body.weightKg ? body : null;
+}
+
+/** 快照长期偏好消毒：只保留非空短字符串，最多 10 条（B1） */
+function sanitizePreferences(input?: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((item): item is string => typeof item === 'string' && !!item.trim())
+    .map((item) => item.trim().slice(0, 30))
+    .slice(0, 10);
+}
+
+/** 快照当次要求消毒：单行短文本（B1） */
+function sanitizeNote(input?: unknown): string | null {
+  if (typeof input !== 'string' || !input.trim()) return null;
+  return input.trim().slice(0, 120);
 }
 
 export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): RecommendationRunner {
@@ -136,6 +176,10 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
     const lockedAliases = (stored?.lockedAliases ?? []).filter((id) =>
       items.some((item) => item.id === id),
     );
+    const body = sanitizeBody(stored?.body);
+    // B1：长期偏好与当次要求按入队快照发送（不现读，可能与入队时不同）
+    const preferences = sanitizePreferences(stored?.preferences);
+    const note = sanitizeNote(stored?.note);
 
     const controller = new AbortController();
     markSent();
@@ -146,7 +190,10 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
         apiKey,
         [
           { role: 'system', content: recommendationSystemPrompt() },
-          { role: 'user', content: recommendationUserPrompt({ items, scene, lockedAliases }) },
+          {
+            role: 'user',
+            content: recommendationUserPrompt({ items, scene, body, lockedAliases, preferences, note }),
+          },
         ],
         CHAT_TIMEOUT_MS,
         { maxTokens: 2048, signal: controller.signal },
@@ -175,7 +222,10 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
       });
       return;
     }
-    const normalized = normalizeRecommendation(parsedContent.value, idByAlias);
+    const normalized = normalizeRecommendation(parsedContent.value, idByAlias, {
+      // B3：锁定集作为本地校验输入——候选缺锁定单品在此拒绝，不只靠提示词约束
+      requireLockedAliases: lockedAliases,
+    });
     if (!normalized.ok) {
       await deps.updateStatus(task.id, ['running'], 'failed', {
         finishedAt: new Date().toISOString(),

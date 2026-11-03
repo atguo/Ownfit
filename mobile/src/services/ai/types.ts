@@ -62,6 +62,19 @@ export function isValidBaseUrl(baseUrl: string): boolean {
   return /^https?:\/\/[^\s/]+/i.test(trimmed);
 }
 
+/**
+ * 服务地址仅接受 https（M6 批次 2，2026-11-03 项目用户确认内测包禁明文）：
+ * 调试期的明文放宽随内测候选收敛，自部署模型需启用 https（或经反向代理）。
+ * 返回错误文案；合法 https 返回 null。空值交给调用方按必填处理。
+ */
+export function insecureUrlProblem(baseUrl: string): string | null {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return null;
+  return /^https:\/\//i.test(trimmed)
+    ? null
+    : '服务地址需以 https:// 开头（内测版本不支持 http 明文，自部署模型请启用 https）';
+}
+
 /** 是否可作为衣物分析的视觉候选（不含密钥可用性检查） */
 export function isVisionCandidate(config: ModelConfig): boolean {
   return (
