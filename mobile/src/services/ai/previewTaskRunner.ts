@@ -16,6 +16,8 @@ export interface PreviewSlotItem {
   itemId: string;
   name: string;
   category: string;
+  /** 衣物外观描述：颜色 + 品类 + 属性（颜色/图案/领型/袖型/版型/长度…），由装配层从档案组装 */
+  description: string;
 }
 
 export interface PreviewRunnerDeps {
@@ -65,13 +67,18 @@ export function createPreviewTaskRunner(deps: PreviewRunnerDeps): PreviewRunner 
   const inflight = new Set<string>();
 
   function buildPrompt(items: PreviewSlotItem[], wearStyle: string): string {
-    const parts = items.map((item) => `${item.category}（${item.name}）`);
+    // 措辞沿用 A 线实验验证过的版本（experiments/src/try-on-preview/prompt.ts）：
+    // MiniMax subject_reference 仅支持人物肖像，服装一致性只能靠 prompt 文字传达，
+    // 因此每件衣物必须带完整外观描述（颜色/图案/领型/袖型/版型）。
+    const parts = items.map((item) => `${item.category}：${item.description}`);
     const wearText = wearStyle && wearStyle !== '自然垂放' ? `穿法：${wearStyle}。` : '';
     return [
       '让图中人物穿上以下衣物，保持人物的脸部、发型、肤色与姿态不变，只替换衣着：',
       ...parts.map((part, index) => `${index + 1}. ${part}`),
       wearText,
-      '全身照，自然站姿，简洁室内背景，真实感风格，不添加衣物清单以外的显著服饰。',
+      '保持人物的脸部、发型、肤色、体型和姿势完全不变，服装的颜色、图案、领口、袖型和长度严格符合上述描述。',
+      '人物完整全身入镜：从头到脚完整呈现，不裁切腿部与鞋履。',
+      '自然站姿，简洁室内背景，真实感照片风格，不添加衣物清单以外的显著服饰。',
     ].join('\n');
   }
 

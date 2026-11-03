@@ -11,6 +11,7 @@ import { resolveImageGenConfig, type ConfigResolution } from '../services/ai/vis
 import { createPreviewTaskRunner, type PreviewRunner } from '../services/ai/previewTaskRunner';
 import { generateImage } from '../services/ai/minimaxClient';
 import { getItem } from '../data/repositories/itemRepository';
+import { getAnalysisView } from '../data/repositories/attributeRepository';
 import { getDefaultConfigId, setDefaultConfigId } from '../data/repositories/taskRepository';
 import {
   createPreviewTask,
@@ -60,11 +61,29 @@ export function initPreviewRunner(): PreviewRunner {
         return { dataUrl: `data:image/jpeg;base64,${base64}`, updatedAt: reference.updatedAt };
       },
       describeItems: async (itemIds) => {
-        const out: Array<{ itemId: string; name: string; category: string }> = [];
+        const out: Array<{ itemId: string; name: string; category: string; description: string }> = [];
         for (const itemId of itemIds) {
           const item = await getItem(itemId);
           if (!item) continue;
-          out.push({ itemId, name: item.name ?? '未命名', category: item.category ?? '衣物' });
+          const view = await getAnalysisView(itemId);
+          const colors = view.colors.value.map((c) => c.name).join('和');
+          const attrs = view.attributes
+            .map((a) => `${a.name}${a.value}`)
+            .join('，')
+            .slice(0, 220);
+          const category = view.category.value ?? '衣物';
+          const description = [
+            colors ? `${colors}的${category}` : category,
+            attrs || view.suggestedName?.value || '',
+          ]
+            .filter(Boolean)
+            .join('；');
+          out.push({
+            itemId,
+            name: view.suggestedName?.value ?? item.name ?? '未命名',
+            category,
+            description: description.slice(0, 300),
+          });
         }
         return out;
       },

@@ -322,7 +322,8 @@ test('执行器：生成成功后落盘并标 succeeded；结果路径可读', a
       getConfig: () => ctx.config,
       getApiKey: async () => 'sk-test',
       readReferenceDataUrl: async () => ({ dataUrl: 'data:image/jpeg;base64,AAA', updatedAt: 'x' }),
-      describeItems: async (ids) => ids.map((id) => ({ itemId: id, name: `衣${id}`, category: '上衣' })),
+      describeItems: async (ids) =>
+        ids.map((id) => ({ itemId: id, name: `衣${id}`, category: '上衣', description: `白色的上衣，领型翻领（衣${id}描述）` })),
       generate: async (input) => {
         calls.push(input);
         return { ok: true, imageUrl: 'https://cdn.example.com/gen1.jpg' };
@@ -338,7 +339,12 @@ test('执行器：生成成功后落盘并标 succeeded；结果路径可读', a
     assert.ok(task.resultPreviewPath, '结果路径已记录');
     assert.equal(calls.length, 1, '只调用一次生成');
     assert.equal(calls[0].personDataUrl.startsWith('data:image/jpeg'), true, '人物参考以 data URL 传入');
-    assert.equal(calls[0].prompt.includes('上衣（衣item-a）'), true, '提示词含单品描述');
+    assert.equal(
+      calls[0].prompt.includes('上衣：白色的上衣，领型翻领（衣item-a描述）'),
+      true,
+      '提示词含衣物完整外观描述（颜色+属性）',
+    );
+    assert.equal(calls[0].prompt.includes('从头到脚完整呈现'), true, '提示词要求全身完整不裁切');
   } finally {
     ctx.close();
   }
