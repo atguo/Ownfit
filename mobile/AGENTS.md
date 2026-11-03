@@ -1,12 +1,14 @@
 本目录属于“衣见”（Ownfit）项目。协作约束、架构边界与同步义务以仓库根目录 [AGENTS.md](../AGENTS.md) 为准；实施顺序与验收见 [docs/开发计划.md](../docs/开发计划.md)。
 
-## 当前结构（M2 已实现，2026-10-29）
+## 当前结构（2026-11-03 核对）
 
-- 路由 `src/app/`（expo-router）：根 Stack + `(tabs)/` 四主入口（今天/衣橱/搭配/我的）+ 任务页 `choose`、`outfit`、`preview`、`add`（Stack 路由，系统返回即原型返回）+ `ai/config`、`ai/config-edit`（AI 服务配置）+ 开发用组件展示 `dev/components`。
-- `src/ui/`：`tokens.ts`（自原型 style.css 逐字提取的设计令牌）、`Icon.tsx`（react-native-svg，path 与原型一致）、`PageTop.tsx`、`Screen.tsx`（页面容器 + KeyboardAvoidingView）、`components/`（Button/Sheet/Toast/Basics/Rows/ItemArt/OutfitBoard/Field）。
-- `src/data/`：`db.ts`（SQLCipher 加密库 + 密钥管理 + user_version 迁移）、`demo.ts`（演示常量）、`repositories/`（item/photo/settings 仓库）。数据库经 `expo-sqlite` 插件 `useSQLCipher` 编译启用，密钥存设备安全存储；照片原件与缩略图在应用私有目录（photos/、thumbs/），写入失败回滚不留半成品。
-- `src/domain/`、`src/services/`：`services/ai/`（AI 配置存储与两类协议客户端，提前自 M5 落地）已实现；`domain/` 业务规则仍随 M3 填充。
-- `src/features/`：`demoStore.ts`（M1 演示状态，仅内存；真实衣橱出自 repositories，两者零交集）、`sheets/`（场景/详情/替换/穿法/预览/感受/衣橱单品/我的页弹层）。
+M0–M4 已完成，M5 集成收尾/待整体验收，M6 未开始。衣物分析与预览已有真机全链路记录；推荐与天气已实现但仍有集成差异和验收缺口，详见 [M5 实施计划](../docs/plans/2026-10-30-M5-真实推荐与AI预览闭环-实施计划.md)。下文带日期记录保留历史语境，不以历史“0 次调用/待验收”覆盖后续证据。
+
+- `src/app/`：根 Stack + `(tabs)/` 四主入口 + `choose`、`outfit`、`add` + `ai/config`、`ai/config-edit` + `dev/components`、`dev/data-tools`。预览为 `PreviewSheet` 弹层，当前没有独立 `preview.tsx` 路由。
+- `src/ui/`：设计令牌、图标、响应式页面容器与原生组件，真实搭配板为 `RealOutfitBoard`。
+- `src/data/`：SQLCipher schema v4、密钥管理与 user_version 迁移；repositories 包含衣物/照片/属性/方案/分析任务/预览/推荐/维护/设置/颜色库。照片、人物参考和生成图保存在应用私有目录。
+- `src/services/`：AI 配置、协议客户端及分析/预览/推荐执行器；`weather.ts` 提供可选城市天气查询。非敏感 AI 配置仍使用私有 JSON。
+- `src/features/`：`outfitSession` 编辑会话，分析/预览/推荐 store，`sheets/` 原生弹层。`demoStore` 仍承载当次场景等内存上下文，不能笼统称与真实流程零交集；真实资料以 repository 为准，推荐尚未接入该当次场景。
 
 ## 命令
 
@@ -35,7 +37,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 
 ### 衣物分析 2.0 与通知修复（2026-10-29 重构，2026-10-30 验证修复）
 
-- 契约 `@ownfit/contract` 升至 `2.0.0-draft`：`attributes[{name,value}]` 动态清单（推荐键表仅引导）、颜色带 hex、非 single 只存诊断；`attributeRepository` 改为动态属性行读写（同名取最新、历史行保留、`deleteAttribute` 物理删除并递增 revision），新增 `colorLibraryRepository`（preferences 表 JSON）；`WardrobeItemSheet` 改动态属性行面板 + 测量填写；`garmentAnalysis.ts` 提示词 v3 强制属性名简体中文，`normalizeAnalysisPayload` 对常见英文键映射为中文并对同名去重（保留最后一条）。
+- `@ownfit/contract` 中衣物分析契约升至 `2.0.0-draft`（非搭配契约版本）：`attributes[{name,value}]` 动态清单（推荐键表仅引导）、颜色带 hex、非 single 只存诊断；`attributeRepository` 改为动态属性行读写（同名取最新、历史行保留、`deleteAttribute` 物理删除并递增 revision），新增 `colorLibraryRepository`（preferences 表 JSON）；`WardrobeItemSheet` 改动态属性行面板 + 测量填写；`garmentAnalysis.ts` 提示词 v3 强制属性名简体中文，`normalizeAnalysisPayload` 对常见英文键映射为中文并对同名去重（保留最后一条）。
 - `garmentTaskRunner` 增 `onTaskSettled` 回调：任务领取/取消/stale/blocked/终态/启动恢复落库后通知（`garmentAnalysisStore` 接 `notifyAnalysisChanged`），修复任务完成后详情页停留「正在分析…」；执行意外异常兜底为 failed（发送前）/interrupted（发送后），不滞留 running。
 - 真机已走通分析全链路（照片 → 分析 → 确认 → 持久化）；中文属性行与重新分析状态刷新已真机复测通过。截断治理（v5 + 40960）后重分析成功：19 项全中文属性；`WardrobeItemSheet.formatTime` 改本地时区（原 UTC 截取差 8 小时）。回归：`node --test mobile/tests/*.test.cjs`（60 项）、`pnpm typecheck`。
 - `app/(tabs)/outfits.tsx`：FeedbackSheet 关闭时立即重载方案列表（页面未失焦 useFocusEffect 不会触发，否则「已穿过」徽章滞后）；M3 预验收（2026-10-30，adb 全程）通过，保存去重不看 basis 的语义待项目用户决定。

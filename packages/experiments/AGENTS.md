@@ -16,6 +16,6 @@
 
 ## 当前工作流
 
-- `src/garment-understanding/`：衣物理解（就绪，等样本）
-- `src/try-on-preview/`：上身预览（准备中，生成服务选型见 `src/try-on-preview/PROVIDERS.md`）
-- 搭配推荐：顺延（原因见根 AGENTS.md §8），脚本未建
+- `src/garment-understanding/`：脚本就绪；APP 动态分析已有真机记录，实验覆盖与质量待完成。
+- `src/try-on-preview/`：MiniMax 路径已接 APP 且有真机全链路记录；真实试穿未完成，服务边界见 `src/try-on-preview/PROVIDERS.md`。
+- `src/outfit-recommendation/`：已恢复，2026-11-02 首次真实跑批；独立候选校验不等于 M3 共用契约验收。当前进度核对日期 2026-11-03。

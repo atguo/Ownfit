@@ -5,9 +5,9 @@
 
 ## 版本与冻结状态
 
-- 当前版本：**`1.0.0`**（2026-10-30 冻结，M3 验收；后续变更需新版本号与回归记录）
+- 冻结决定与公共入口版本：**`1.0.0`**（2026-10-30，M3 验收）。2026-11-03 核对：`src/index.ts` 已导出 1.0.0，但 `src/schema.ts` 常量和 package.json 仍为 1.0.0-draft，待统一；本次只登记差异。
 - 冻结规则（开发计划 §6.3）：M3 验收通过时冻结为 `1.0.0`；此后变更须记录原因、影响页面与状态、兼容方案及回归范围，升级版本并更新文档——不能为维持"冻结"而伪造数据
-- ⚠️ **真实输出适配待验证**：契约字段基于业务结构（搭配生成文档 §5.1）设计，尚未经过 A 线真实模型返回样本校验；A1/A2 实验产出后回填适配结论，在此之前不得宣称联调通过
+- ⚠️ **真实输出适配待验证**：契约字段基于业务结构（搭配生成文档 §5.1）设计，推荐已有 11-02 真实输出，但经过的是 experiments 独立候选校验；APP 采用后保存才走 parsePlan，来源/理由/缺口传递仍需补齐，不得宣称共用契约端到端验收通过
 
 ## 结构概要
 
@@ -28,7 +28,7 @@
 ## 使用
 
 ```bash
-pnpm --filter @ownfit/contract test        # 边界样例断言（7 组搭配样例 + 12 组衣物分析样例）
+pnpm --filter @ownfit/contract test        # 边界样例断言（7 组搭配样例 + 15 组衣物分析样例）
 pnpm --filter @ownfit/contract typecheck
 ```
 
@@ -41,27 +41,17 @@ import { parseGarmentAnalysis, GARMENT_ANALYSIS_VERSION } from '@ownfit/contract
 
 字段设计与变更规则见 [docs/开发计划.md](../../docs/开发计划.md) §6.3；真实输出适配的未决项登记在 A 线（packages/experiments）。衣物分析实现依据 [分批执行手册](../../docs/plans/2026-10-29-衣物AI分析-分批执行手册.md) §3.1。
 
-## 衣物分析契约（GARMENT_ANALYSIS_VERSION = `1.0.0-draft`）
+## 衣物分析契约（GARMENT_ANALYSIS_VERSION = `2.0.0-draft`）
 
-独立版本，与搭配契约并存，**不改变搭配字段与含义**。导出：`garmentAnalysisSchema`、`GarmentAnalysis`、`parseGarmentAnalysis(value)`（返回 `{ok,value}` 或 `{ok,error}`）。
+独立版本，不改变搭配字段。已取代 1.0 固定字段三态；实现依据为 [2.0 重构设计](../../docs/plans/2026-10-29-衣物分析字段与来源重构-设计.md)。
 
-| 键 | 取值 | 限制 |
-| --- | --- | --- |
-| `targetStatus` | `single` / `ambiguous` / `not_garment` / `unreadable` | 只有 `single` 允许产生可应用属性 |
-| `suggestedName` | `Field<string>` | known 时 1-30 字；仅 known/unknown |
-| `category` | `Field<上衣/下装/连衣裙/外套/鞋履/包/配饰>` | 仅 known/unknown；**契约只接受"鞋履"，实验里的"鞋"必须由适配器显式映射** |
-| `colors` | `Field<{name,isPrimary}[]>` | known 时 1-4 项、名字 1-20 字、恰有一个主色；仅 known/unknown |
-| `pattern` | `Field<纯色/条纹/格纹/印花/拼接/其他>` | 可 unknown/not_applicable |
-| `neckline` | `Field<无领/圆领/V领/立领/翻领/连帽/一字领/其他>` | 可 unknown/not_applicable |
-| `sleeve` | `Field<无袖/短袖/七分袖/长袖/其他>` | 可 unknown/not_applicable |
-| `fit` | `Field<修身/合体/宽松/oversize>` | 外观版型，**不是真人合身结论**；可 unknown/not_applicable |
-| `stylingTags` | `Field<string[]>` | known 时 0-6 项、每项 1-20 字（空数组=已知无标签，与未知不同） |
-| `description` | `Field<string>` | known 时 1-120 字 |
-| `unclearParts` | `string[]` | 0-6 项、每项 1-80 字；说明可见证据缺口 |
+| 键 | 当前结构与约束 |
+| --- | --- |
+| targetStatus | single / ambiguous / not_garment / unreadable |
+| category | 衣物大类或 null；鞋类使用“鞋履” |
+| suggestedName | 1–30 字或 null |
+| colors | 0–4 项；name 1–20 字、hex 为 #RRGGBB、isPrimary 布尔；非空恰有一个主色 |
+| attributes | 0–40 项动态 name/value；名称 1–20 字且不重复，值 1–200 字 |
+| unclearParts | 0–6 项，每项 1–80 字 |
 
-语义约束：
-
-- `Field<T>` = `{state:'known';value:T}` | `{state:'unknown';value:null}` | `{state:'not_applicable';value:null}`。未知与不适用都用 `value=null`，**不用空串或 0 冒充**。
-- 对象严格校验，**未知键拒绝**；所有键必需。
-- `targetStatus` 非 `single` 时：所有属性必须 `unknown`，且 `unclearParts` 至少 1 项。
-- 契约只保证结构与取值合法，**不能防止模型幻觉**；不存模型自报置信度，真机仍需逐项人工核对。
+严格对象拒绝未知键。非 single 时 category/suggestedName 必须为 null，colors/attributes 为空，unclearParts 至少一项。未提取属性不制造“未知”占位值；推荐键仅用于提示词引导。契约只保证结构合法，不能保证识别准确；已有真机分析记录不替代逐项效果验收。
