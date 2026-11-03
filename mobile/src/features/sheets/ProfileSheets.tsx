@@ -19,6 +19,7 @@ import {
   getPreviewReference,
   removePreviewReference,
   savePreviewReference,
+  setPreviewReferenceKind,
   type PreviewReference,
 } from '../../data/repositories/previewRepository';
 import { resetDemo, setPrefs, useDemoStore } from '../demoStore';
@@ -129,6 +130,19 @@ export function ReferenceSheet({ visible, onClose }: { visible: boolean; onClose
     }
   }
 
+  // C3：声明参考视角——面部特写 vs 全身照的可用证据不同（脸部照不假定模型知道身材）
+  async function chooseKind(kind: 'face' | 'full_body') {
+    setBusy(true);
+    try {
+      await setPreviewReferenceKind(kind);
+      const next = await getPreviewReference();
+      setRef(next);
+      toast(kind === 'face' ? '已标记为面部特写' : '已标记为全身照');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Sheet visible={visible} title="你的参考，由你决定。" onClose={onClose}>
       <Text style={styles.description}>
@@ -138,6 +152,30 @@ export function ReferenceSheet({ visible, onClose }: { visible: boolean; onClose
       </Text>
       {reference ? (
         <Notice>{`已准备（${reference.updatedAt.slice(0, 10)}）。更换会覆盖旧参考并使旧预览过时。`}</Notice>
+      ) : null}
+      {reference ? (
+        <View>
+          <Text style={styles.kindLabel}>这张参考是（用于生成时如实说明证据范围）：</Text>
+          <View style={styles.kindRow}>
+            <Button
+              variant="chip"
+              label="面部特写"
+              active={reference.kind === 'face'}
+              onPress={() => void chooseKind('face')}
+              disabled={busy}
+            />
+            <Button
+              variant="chip"
+              label="全身照"
+              active={reference.kind === 'full_body'}
+              onPress={() => void chooseKind('full_body')}
+              disabled={busy}
+            />
+          </View>
+          {reference.kind === 'face' ? (
+            <Notice>面部特写只能保留长相；生成图的身材比例由模型推断，可能与本人不同，不会用于合身判断。</Notice>
+          ) : null}
+        </View>
       ) : null}
       <Button
         variant="primary"
@@ -302,5 +340,16 @@ const styles = StyleSheet.create({
   full: {
     alignSelf: 'stretch',
     marginTop: 10,
+  },
+  kindLabel: {
+    ...type.footnote,
+    color: colors.muted,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  kindRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
   },
 });

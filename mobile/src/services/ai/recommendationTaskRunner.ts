@@ -38,8 +38,15 @@ export interface RecommendationRunnerDeps {
   ): Promise<boolean>;
   getConfig(id: string): ModelConfig | undefined;
   getApiKey(keyRef: string): Promise<string | null>;
-  /** 读取当前衣物档案（已入库单品，别名 → 真实 id 映射一并返回） */
-  loadProfile(): Promise<{ items: ProfileItem[]; idByAlias: Map<string, string> }>;
+  /** 读取当前衣物档案（已入库单品，别名 → 真实 id 映射一并返回）。
+   * lockedAliases：请求锁定的别名（B2 预算超限时优先送入）；truncated=本次未送入全部档案。 */
+  loadProfile(lockedAliases?: string[]): Promise<{
+    items: ProfileItem[];
+    idByAlias: Map<string, string>;
+    truncated?: boolean;
+    sentCount?: number;
+    totalCount?: number;
+  }>;
   /** 当次场景快照（仅旧任务无入队快照时兜底使用） */
   loadScene(): Promise<{
     city: string;
@@ -161,7 +168,13 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
       return;
     }
 
-    const { items, idByAlias } = await deps.loadProfile();
+    // 场景与锁定集用入队时的快照（不现读会话状态）；旧任务无快照时回退现读
+    const stored = parseStoredInput(task.inputJson);
+    const scene = stored?.scene ?? (await deps.loadScene());
+    const requestedLocks = stored?.lockedAliases ?? [];
+    // B2：档案超限时锁定项优先送入（别名编号保持全柜口径，不重排）
+    const profile = await deps.loadProfile(requestedLocks);
+    const { items, idByAlias } = profile;
     if (items.length === 0) {
       await deps.updateStatus(task.id, ['running'], 'failed', {
         finishedAt: new Date().toISOString(),
@@ -170,16 +183,15 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
       });
       return;
     }
-    // 场景与锁定集用入队时的快照（不现读会话状态）；旧任务无快照时回退现读
-    const stored = parseStoredInput(task.inputJson);
-    const scene = stored?.scene ?? (await deps.loadScene());
-    const lockedAliases = (stored?.lockedAliases ?? []).filter((id) =>
-      items.some((item) => item.id === id),
-    );
+    const lockedAliases = requestedLocks.filter((id) => items.some((item) => item.id === id));
     const body = sanitizeBody(stored?.body);
     // B1：长期偏好与当次要求按入队快照发送（不现读，可能与入队时不同）
     const preferences = sanitizePreferences(stored?.preferences);
     const note = sanitizeNote(stored?.note);
+    // B2：截取时在提示词中如实说明（不静默丢弃）
+    const profileNote = profile.truncated
+      ? `（衣物较多，本次仅送入 ${profile.sentCount}/${profile.totalCount} 件：锁定单品与较早入库优先；其余未参与本次推荐）`
+      : undefined;
 
     const controller = new AbortController();
     markSent();
@@ -192,7 +204,7 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
           { role: 'system', content: recommendationSystemPrompt() },
           {
             role: 'user',
-            content: recommendationUserPrompt({ items, scene, body, lockedAliases, preferences, note }),
+            content: recommendationUserPrompt({ items, scene, body, lockedAliases, preferences, note, profileNote }),
           },
         ],
         CHAT_TIMEOUT_MS,
@@ -243,7 +255,6 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
 
   async function execute(task: RecommendationTask): Promise<void> {
     let sent = false;
-    let timerFired = false;
 
     const run = (async (): Promise<'done' | 'error'> => {
       try {
@@ -265,14 +276,14 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
       }
     })();
 
+    // 看门狗定时器在任务落终态后清理（R8：不残留定时器拖住进程/测试）
+    let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
     const watchdog = new Promise<'timeout'>((resolve) => {
-      setTimeout(() => {
-        timerFired = true;
-        resolve('timeout');
-      }, EXECUTE_WATCHDOG_MS);
+      watchdogTimer = setTimeout(() => resolve('timeout'), EXECUTE_WATCHDOG_MS);
     });
 
     const outcome = await Promise.race([run, watchdog]);
+    if (watchdogTimer) clearTimeout(watchdogTimer);
     if (outcome === 'timeout') {
       await deps
         .updateStatus(task.id, ['running'], sent ? 'interrupted' : 'failed', {

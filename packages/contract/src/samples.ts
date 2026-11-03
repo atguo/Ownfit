@@ -74,6 +74,25 @@ const basisNotLockedRequest = {
   scene,
 };
 
+/** 8（v1.1.0）逐件穿法：内搭前塞 + 外套敞开同时表达；顶层 wear 保留 */
+const perItemWearPlan: Plan = {
+  ...validPlan,
+  planId: 'plan-008',
+  items: [
+    { itemId: 'item-knit', role: 'basis', wearStyle: '前侧塞衣角' },
+    { itemId: 'item-pants', role: 'locked' },
+    { itemId: 'item-outer', role: 'piece', wearStyle: '外层敞开穿' },
+    { itemId: 'item-shoes', role: 'piece' },
+  ],
+};
+
+/** 8b（v1.1.0）逐件穿法取值不在白名单 → 必须拒绝 */
+const perItemWearInvalid = {
+  ...validPlan,
+  planId: 'plan-009',
+  items: [{ itemId: 'item-knit', role: 'basis', wearStyle: '系成斗篷' }],
+};
+
 const failure = parsePlanFailure({
   kind: 'basis_not_locked',
   message: 'basisItemId 必须包含在 lockedItemIds 中',
@@ -89,6 +108,8 @@ export const contractSamples = {
   allLockedRequest,
   expiredVersionPlan,
   basisNotLockedRequest,
+  perItemWearPlan,
+  perItemWearInvalid,
   failure,
 };
 
@@ -117,6 +138,17 @@ export function runContractTests(): void {
   // 7. 失败结果
   assert.deepEqual(parsePlanFailure(basisNotLockedRequest).ok, false, '请求不是失败结果的结构');
   assert.equal(failure.ok && failure.value.kind, 'basis_not_locked');
+
+  // 8（v1.1.0）逐件穿法：合法取值通过且逐项保留；非法取值拒绝
+  const parsedPerItem = parsePlan(perItemWearPlan);
+  assert.deepEqual(parsedPerItem.ok, true, 'v1.1.0 逐件穿法方案应通过');
+  assert.ok(
+    parsedPerItem.ok &&
+      parsedPerItem.value.items.find((i) => i.itemId === 'item-knit')?.wearStyle === '前侧塞衣角' &&
+      parsedPerItem.value.items.find((i) => i.itemId === 'item-outer')?.wearStyle === '外层敞开穿',
+    '逐件 wearStyle 应按单品保留',
+  );
+  assert.deepEqual(parsePlan(perItemWearInvalid).ok, false, '逐件 wearStyle 非白名单取值应被拒绝');
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +316,6 @@ if (process.argv[1]?.includes('test') || process.argv[1]?.includes('samples')) {
   runContractTests();
   runGarmentAnalysisTests();
   console.log(
-    `契约样例测试通过（CONTRACT_VERSION=${CONTRACT_VERSION}，7 组搭配样例；GARMENT_ANALYSIS_VERSION=${GARMENT_ANALYSIS_VERSION}，15 组衣物分析样例）。`,
+    `契约样例测试通过（CONTRACT_VERSION=${CONTRACT_VERSION}，9 组搭配样例；GARMENT_ANALYSIS_VERSION=${GARMENT_ANALYSIS_VERSION}，15 组衣物分析样例）。`,
   );
 }

@@ -199,14 +199,16 @@ export function updateRecommendationTaskStatus(
   return updateTaskStatus(id, allowedFrom, to, patch);
 }
 
-/** 成功提交候选（真实单品 ID 已回映）；result_json 也存 gaps/summary 供面板展示 */
+/** 成功提交候选（真实单品 ID 已回映）；result_json 也存 gaps/summary 供面板展示。
+ * R8（2026-11-04）：条件提交——仅当任务仍为 running 时写入；
+ * 看门狗已把任务标为 interrupted 后迟到的执行结果不得覆盖终态（结果与状态分离，防双写）。 */
 export async function commitRecommendationResult(
   taskId: string,
   result: { candidates: RecommendationCandidate[]; gaps: string[]; summary?: string },
 ): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    'UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?',
+    "UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ? AND status = 'running'",
     JSON.stringify(result),
     new Date().toISOString(),
     taskId,

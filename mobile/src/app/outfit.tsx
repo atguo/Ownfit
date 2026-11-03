@@ -8,9 +8,16 @@ import { Tag } from '../ui/components/Basics';
 import { Icon } from '../ui/Icon';
 import { RealOutfitBoard } from '../ui/components/RealOutfitBoard';
 import { Sheet } from '../ui/components/Sheet';
+import { Alert } from 'react-native';
 import { PreviewSheet } from '../features/sheets/PreviewSheet';
+import { RecommendationSheet } from '../features/sheets/RecommendationSheet';
 import { WearSheet } from '../features/sheets/WearSheet';
 import { SlotReplaceSheet } from '../features/sheets/SlotReplaceSheet';
+import {
+  enqueueRecommendation,
+  loadSceneSnapshot,
+  resolveTextForRecommendation,
+} from '../features/recommendationStore';
 import {
   buildContractPlan,
   getOutfitSession,
@@ -52,8 +59,9 @@ export default function OutfitScreen() {
   const [wearOpen, setWearOpen] = useState(false);
   const [replaceSlotOpen, setReplaceSlotOpen] = useState<OutfitSlot | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [recommendOpen, setRecommendOpen] = useState(false);
 
-  const presentSlots = (['dress', 'top', 'bottom', 'shoes'] as OutfitSlot[]).filter(
+  const presentSlots = (['dress', 'top', 'outer', 'bottom', 'shoes'] as OutfitSlot[]).filter(
     (slot) => session.slots[slot],
   );
   const missing = missingSlots(session.slots);
@@ -102,6 +110,39 @@ export default function OutfitScreen() {
         toast(error instanceof Error ? error.message : '保存失败，请重试');
       }
     })();
+  }
+
+  /** B5（决策 D-6）：AI 推荐某一槽位的替代——其余槽位全部随请求锁定、只换该槽位；
+   * 走与整 request 相同的推荐任务链路，候选仍需复核后采用。 */
+  async function aiSwapSlot(slot: OutfitSlot) {
+    const resolution = await resolveTextForRecommendation();
+    if (resolution.status !== 'ready') {
+      Alert.alert(
+        '还没有可用的文本模型',
+        '到「我的 → 模型配置」添加并启用文本模型后，即可让 AI 只换这一件推荐替代。',
+        [{ text: '知道了' }],
+      );
+      return;
+    }
+    const otherItems = presentSlots
+      .filter((s) => s !== slot)
+      .map((s) => session.slots[s] as string)
+      .filter(Boolean);
+    const lockedItemIds = [...new Set(otherItems)];
+    if (lockedItemIds.length === 0) {
+      toast('先补齐其他槽位，AI 才能围绕它们推荐替代');
+      return;
+    }
+    setReplaceSlotOpen(null);
+    setRecommendOpen(true);
+    const scene = await loadSceneSnapshot();
+    const result = await enqueueRecommendation({
+      scene,
+      configId: resolution.config.id,
+      lockedItemIds,
+      note: `只换${slotLabels[slot]}，其他单品保持不变`,
+    });
+    toast(result.status === 'created' ? 'AI 正在推荐替代（其他件保持不变）…' : '同样的推荐已在进行中');
   }
 
   const parentDiff = parentDiffText(session.parentItemIds, session.slots);
@@ -217,7 +258,10 @@ export default function OutfitScreen() {
           setReplaceSlotOpen(null);
           router.push('/add');
         }}
+        onAiSwap={(slot) => void aiSwapSlot(slot)}
       />
+
+      <RecommendationSheet visible={recommendOpen} onClose={() => setRecommendOpen(false)} />
 
       <PreviewSheet
         visible={previewOpen}
@@ -225,6 +269,10 @@ export default function OutfitScreen() {
         basisItemId={session.basisId ?? ''}
         itemIds={presentSlots.flatMap((slot) => (session.slots[slot] ? [session.slots[slot] as string] : []))}
         wearStyle={session.wear}
+        // C4：逐件穿法随输入版本进快照（外套敞开/内搭前塞可同时表达）
+        itemWear={Object.fromEntries(
+          Object.entries(session.slotWear).map(([slot, style]) => [session.slots[slot as OutfitSlot] as string, style]),
+        )}
       />
     </Page>
   );

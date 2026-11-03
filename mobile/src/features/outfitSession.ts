@@ -3,20 +3,24 @@
 // 来源与 AI 理由随会话保存进契约 Plan（source/reason），不冒充手动。缺口按品类显式表达
 // （衣橱文档 §3.1.1："已录入衣橱中暂未找到"，不推断用户未拥有）。
 // 撤销栈为会话内存态；保存走契约校验 + planRepository。
+// 2026-11-04（B3/R2）：外套为独立槽位 outer，与上衣/下装共存（≤2 层：内搭可加外套）；
+// 槽位映射不再把外套并进上衣导致采用时丢件。会话新增 reasonStale：AI 理由在组合被
+// 修改后标记"原始理由"，保存时如实标注，不冒充当前组合的推荐理由（R9/D2）。
 
 import { useSyncExternalStore } from 'react';
 import type { SceneSnapshot, WearStyle } from '@ownfit/contract';
 import { type ItemCategory } from '../data/demo';
 import { getItem, listItemIdsByStatus } from '../data/repositories/itemRepository';
 
-// 品类 → 组合槽位。连衣裙与"上衣+下装"互斥；包/配饰不进入默认组合。
-export type OutfitSlot = 'top' | 'dress' | 'bottom' | 'shoes';
+// 品类 → 组合槽位。连衣裙与"上衣+下装"互斥；外套独立槽位；包/配饰不进入默认组合。
+export type OutfitSlot = 'top' | 'dress' | 'bottom' | 'shoes' | 'outer';
 
 export function slotForCategory(category: ItemCategory): OutfitSlot | null {
   switch (category) {
     case '上衣':
-    case '外套':
       return 'top';
+    case '外套':
+      return 'outer';
     case '连衣裙':
       return 'dress';
     case '下装':
@@ -28,7 +32,7 @@ export function slotForCategory(category: ItemCategory): OutfitSlot | null {
   }
 }
 
-/** 必需槽位的组合方案（连衣裙替代上衣+下装；鞋恒必需） */
+/** 必需槽位的组合方案（连衣裙替代上衣+下装；鞋恒必需；外套可选层） */
 export const REQUIRED_SLOTS: OutfitSlot[][] = [
   ['dress', 'shoes'],
   ['top', 'bottom', 'shoes'],
@@ -39,6 +43,7 @@ export const slotLabels: Record<OutfitSlot, string> = {
   dress: '连衣裙',
   bottom: '下装',
   shoes: '鞋子',
+  outer: '外套',
 };
 
 export interface OutfitSnapshot {
@@ -46,6 +51,9 @@ export interface OutfitSnapshot {
   slots: Partial<Record<OutfitSlot, string>>;
   locks: string[];
   wear: WearStyle;
+  /** 逐件穿法（C4，契约 v1.1.0）：外套敞开与内搭前塞可同时表达；缺省槽位按顶层 wear */
+  slotWear: Partial<Record<OutfitSlot, WearStyle>>;
+  reasonStale: boolean;
 }
 
 export interface OutfitSessionState {
@@ -54,6 +62,8 @@ export interface OutfitSessionState {
   slots: Partial<Record<OutfitSlot, string>>;
   locks: string[];
   wear: WearStyle;
+  /** 逐件穿法（C4）：按槽位覆盖顶层 wear；无外套时与顶层一致 */
+  slotWear: Partial<Record<OutfitSlot, WearStyle>>;
   parentPlanId: string | null;
   parentLabel: string | null;
   parentItemIds: string[];
@@ -61,6 +71,8 @@ export interface OutfitSessionState {
   source: 'manual' | 'ai';
   /** AI 推荐理由（source='ai' 时来自候选 reason；无则 null，不编造） */
   reason: string | null;
+  /** AI 理由是否已失效（组合被替换后标 true；保存时如实标注为原始理由） */
+  reasonStale: boolean;
 }
 
 interface SessionState extends OutfitSessionState {
@@ -73,11 +85,13 @@ let state: SessionState = {
   slots: {},
   locks: [],
   wear: '自然垂放',
+  slotWear: {},
   parentPlanId: null,
   parentLabel: null,
   parentItemIds: [],
   source: 'manual',
   reason: null,
+  reasonStale: false,
   history: [],
 };
 
@@ -108,6 +122,8 @@ const snapshot = (): OutfitSnapshot => ({
   slots: { ...state.slots },
   locks: [...state.locks],
   wear: state.wear,
+  slotWear: { ...state.slotWear },
+  reasonStale: state.reasonStale,
 });
 
 /** 修改入撤销栈 */
@@ -123,7 +139,7 @@ export function outfitHistoryLength(): number {
 export function outfitUndo(): boolean {
   const prev = state.history.pop();
   if (!prev) return false;
-  set({ basisId: prev.basisId, slots: prev.slots, locks: prev.locks, wear: prev.wear });
+  set({ basisId: prev.basisId, slots: prev.slots, locks: prev.locks, wear: prev.wear, slotWear: prev.slotWear, reasonStale: prev.reasonStale });
   return true;
 }
 
@@ -139,20 +155,33 @@ export function isLocked(itemId: string): boolean {
   return state.locks.includes(itemId);
 }
 
-/** 槽位替换：只允许替换未锁定槽位（M3 通过条件：只替换未锁定项） */
+/** 槽位替换：只允许替换未锁定槽位（M3 通过条件：只替换未锁定项）。
+ * AI 来源会话中换件后，原推荐理由不再描述当前组合 → reasonStale（R9）。 */
 export function replaceSlot(slot: OutfitSlot, newItemId: string): 'ok' | 'locked' {
   const current = state.slots[slot];
   if (current && state.locks.includes(current)) return 'locked';
+  const changed = current !== newItemId;
   withHistory({
     slots: { ...state.slots, [slot]: newItemId },
     // 基础单品解锁后被替换，新单品承接其角色，避免保存时追加旧单品。
     basisId: current === state.basisId ? newItemId : state.basisId,
+    ...(changed && state.source === 'ai' && state.reason ? { reasonStale: true } : null),
   });
   return 'ok';
 }
 
 export function setWear(style: WearStyle) {
   withHistory({ wear: style });
+}
+
+/** 逐件穿法（C4）：按槽位设置；顶层 wear 语义为"主穿法"（内搭/连衣裙），
+ * 外套槽位的穿法单独记录（外层敞开穿可与内搭前塞同时表达）。 */
+export function setSlotWear(slot: OutfitSlot, style: WearStyle) {
+  withHistory({
+    slotWear: { ...state.slotWear, [slot]: style },
+    // 顶层 wear 始终表示主穿法（内搭/连衣裙；非外套槽位）——保持契约 wear 必填字段的语义稳定
+    ...(slot !== 'outer' ? { wear: style } : null),
+  });
 }
 
 /** 缺失的必需槽位（组合完整性检查；缺口显式表达，不虚构完整组合） */
@@ -214,6 +243,7 @@ export async function startOutfitFrom(basisId: string): Promise<boolean> {
     parentItemIds: [],
     source: 'manual',
     reason: null,
+    reasonStale: false,
     history: [],
   });
   return true;
@@ -222,6 +252,8 @@ export async function startOutfitFrom(basisId: string): Promise<boolean> {
 /**
  * 载入既有内容为当前会话：复用已保存方案（记录父版本）或 AI 推荐采用
  * （origin.source='ai' 并携带理由；修改后保存保留来源，不冒充手动）。
+ * locks：采用的锁定集合（R3：采用保留原锁定，不再只锁 basis）；
+ * 复用已保存方案时传方案内 basis/locked 角色，保持原方案含义（D2）。
  */
 export function loadOutfitFrom(input: {
   planId: string;
@@ -229,40 +261,59 @@ export function loadOutfitFrom(input: {
   basisId: string;
   slots: Partial<Record<OutfitSlot, string>>;
   wear: WearStyle;
+  /** 逐件穿法（C4：来自方案 per-item wearStyle；缺省空） */
+  slotWear?: Partial<Record<OutfitSlot, WearStyle>>;
   itemIds: string[];
   origin?: { source: 'manual' | 'ai'; reason: string | null };
+  locks?: string[];
 }) {
   state.history = [];
   set({
     active: true,
     basisId: input.basisId,
     slots: { ...input.slots },
-    locks: [input.basisId],
+    locks: input.locks?.length ? [...new Set([input.basisId, ...input.locks])] : [input.basisId],
     wear: input.wear,
+    slotWear: input.slotWear ? { ...input.slotWear } : {},
     parentPlanId: input.planId,
     parentLabel: input.name,
     parentItemIds: [...input.itemIds],
     source: input.origin?.source ?? 'manual',
     reason: input.origin?.reason ?? null,
+    reasonStale: false,
   });
 }
 
-/** 会话 → 契约 Plan。gaps 表达缺失槽位（真实衣橱暂缺，不虚构完整组合）。 */
+/** 会话 → 契约 Plan。gaps 表达缺失槽位（真实衣橱暂缺，不虚构完整组合）。
+ * AI 理由在组合被修改后（reasonStale）保存时如实标注为原始理由，不冒充当前组合的推荐依据（R9）。 */
 export function buildContractPlan(planId: string, scene: SceneSnapshot): import('@ownfit/contract').Plan {
   const missing = missingSlots(state.slots);
-  const items: Array<{ itemId: string; role: 'basis' | 'locked' | 'piece' }> = [];
-  if (state.basisId) items.push({ itemId: state.basisId, role: 'basis' });
-  for (const id of Object.values(state.slots)) {
-    if (!id || id === state.basisId) continue;
-    items.push({ itemId: id, role: state.locks.includes(id) ? 'locked' : 'piece' });
+  const items: Array<{ itemId: string; role: 'basis' | 'locked' | 'piece'; wearStyle?: WearStyle }> = [];
+  if (state.basisId) {
+    const basisSlot = (Object.entries(state.slots) as [OutfitSlot, string][]).find(
+      ([, id]) => id === state.basisId,
+    )?.[0];
+    const basisWear = basisSlot ? state.slotWear[basisSlot] : undefined;
+    items.push({ itemId: state.basisId, role: 'basis', ...(basisWear ? { wearStyle: basisWear } : null) });
   }
+  for (const [slot, id] of Object.entries(state.slots) as [OutfitSlot, string][]) {
+    if (!id || id === state.basisId) continue;
+    const slotWear = state.slotWear[slot];
+    items.push({
+      itemId: id,
+      role: state.locks.includes(id) ? 'locked' : 'piece',
+      // C4：逐件穿法只在有显式设置时输出（缺省按顶层 wear，不重复存储）
+      ...(slotWear ? { wearStyle: slotWear } : null),
+    });
+  }
+  const reason = state.reasonStale && state.reason ? `（搭配已修改，以下为原始推荐理由）${state.reason}` : state.reason;
   return {
     planId,
     parentPlanId: state.parentPlanId,
     version: 1,
     items,
     wear: { slot: '整体', style: state.wear },
-    reason: state.reason,
+    reason,
     gaps: missing.map((slot) => ({ kind: 'missing_category' as const, message: slotGapMessage(slot) })),
     scene: { ...scene },
     source: state.source,

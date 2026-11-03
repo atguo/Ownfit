@@ -30,7 +30,8 @@ export interface PlanInput {
   id?: string;
   parentId?: string | null;
   basisItemId: string;
-  itemIds: { itemId: string; role: PlanItem['role'] }[];
+  /** 单品与角色；wearStyle 为逐件穿法（契约 v1.1.0，可省略=按顶层 wear） */
+  itemIds: { itemId: string; role: PlanItem['role']; wearStyle?: string }[];
   wear: Wear;
   reason?: string | null;
   scene: SceneSnapshot;
@@ -48,7 +49,11 @@ export function planInputFromContract(plan: Plan): PlanInput {
     id: plan.planId,
     parentId: plan.parentPlanId,
     basisItemId: plan.items.find((item) => item.role === 'basis')!.itemId,
-    itemIds: plan.items.map((item) => ({ itemId: item.itemId, role: item.role })),
+    itemIds: plan.items.map((item) => ({
+      itemId: item.itemId,
+      role: item.role,
+      ...(item.wearStyle ? { wearStyle: item.wearStyle } : null),
+    })),
     wear: plan.wear,
     reason: plan.reason,
     scene: plan.scene,
@@ -94,12 +99,14 @@ export async function savePlan(input: PlanInput, name: string | null): Promise<S
     );
     await db.runAsync('DELETE FROM plan_items WHERE plan_id = ?', id);
     for (const [position, item] of input.itemIds.entries()) {
+      // C4：逐件穿法随 plan_items 持久化（v7 wear_style 列；null=按顶层 wear）
       await db.runAsync(
-        'INSERT INTO plan_items (plan_id, item_id, role, position) VALUES (?, ?, ?, ?)',
+        'INSERT INTO plan_items (plan_id, item_id, role, position, wear_style) VALUES (?, ?, ?, ?, ?)',
         id,
         item.itemId,
         item.role,
         position,
+        item.wearStyle ?? null,
       );
     }
   });
@@ -128,13 +135,15 @@ interface PlanRow {
 
 async function hydratePlan(row: PlanRow): Promise<SavedPlan> {
   const db = await getDb();
-  const itemRows = await db.getAllAsync<{ item_id: string; role: string }>(
-    'SELECT item_id, role FROM plan_items WHERE plan_id = ? ORDER BY position',
+  const itemRows = await db.getAllAsync<{ item_id: string; role: string; wear_style: string | null }>(
+    'SELECT item_id, role, wear_style FROM plan_items WHERE plan_id = ? ORDER BY position',
     row.id,
   );
   const items: PlanItem[] = itemRows.map((r) => ({
     itemId: r.item_id,
     role: r.role as PlanItem['role'],
+    // C4：逐件穿法回读（null=按顶层 wear，不输出字段）
+    ...(r.wear_style ? { wearStyle: r.wear_style as PlanItem['wearStyle'] } : null),
   }));
   const worn = await db.getFirstAsync<{ satisfied: string | null }>(
     'SELECT satisfied FROM worn_records WHERE plan_id = ? ORDER BY worn_at DESC LIMIT 1',
@@ -197,20 +206,25 @@ export async function findDuplicate(
   return plans.find((p) => key(p.items.map((i) => i.itemId)) === key(itemIds) && p.wear.style === wearStyle);
 }
 
-/** 记录穿着与感受。satisfied=null 表示"先只记录穿过"（保留未知，不视为满意）。 */
+/** 记录穿着与感受。satisfied=null 表示"先只记录穿过"（保留未知，不视为满意）。
+ * reasons（D3，2026-11-04 提前实现）：可跳过的最小原因（多选，JSON 数组存 worn_records.reasons）；
+ * 关联方案版本，用于区分"推荐不适合"与"预览误导"等归因，默认可不填。 */
 export async function recordWorn(
   planId: string,
   value: 'happy' | 'unhappy' | 'skip',
   note?: string,
+  reasons?: string[],
 ): Promise<void> {
   const db = await getDb();
+  const cleanReasons = (reasons ?? []).filter((r) => typeof r === 'string' && !!r.trim()).slice(0, 6);
   await db.runAsync(
-    'INSERT INTO worn_records (id, plan_id, worn_at, satisfied, note) VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO worn_records (id, plan_id, worn_at, satisfied, note, reasons) VALUES (?, ?, ?, ?, ?, ?)',
     `worn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     planId,
     new Date().toISOString(),
     value === 'happy' ? 'yes' : value === 'unhappy' ? 'no' : null,
     note ?? null,
+    cleanReasons.length ? JSON.stringify(cleanReasons) : null,
   );
 }
 
@@ -231,7 +245,11 @@ export async function saveContractPlan(plan: Plan, name: string | null): Promise
       id: plan.planId,
       parentId: plan.parentPlanId,
       basisItemId: plan.items.find((i) => i.role === 'basis')!.itemId,
-      itemIds: plan.items.map((i) => ({ itemId: i.itemId, role: i.role })),
+      itemIds: plan.items.map((i) => ({
+        itemId: i.itemId,
+        role: i.role,
+        ...(i.wearStyle ? { wearStyle: i.wearStyle } : null),
+      })),
       wear: plan.wear,
       reason: plan.reason,
       scene: plan.scene,

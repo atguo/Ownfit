@@ -21,6 +21,9 @@ export interface PreviewReference {
   path: string;
   /** 参考版本时间（进入预览任务输入版本） */
   updatedAt: string;
+  /** C3 参考视角（用户声明）：面部特写 / 全身照。缺失为旧记录（未声明）。
+   * 仅有脸部照时提示词不得假定模型知道本人身材（AI上身预览 §5 C3）。 */
+  kind?: 'face' | 'full_body';
 }
 
 function refDir(): Directory {
@@ -120,6 +123,25 @@ export async function removePreviewReference(): Promise<void> {
   await db.runAsync('DELETE FROM preferences WHERE id = ?', REFERENCE_ID);
 }
 
+/** C3：声明参考视角（面部特写/全身照）。视角影响提示词的诚实表述，
+ * 变化视为参考版本变化（updatedAt 前移），旧预览不再标注"本方案"。 */
+export async function setPreviewReferenceKind(kind: 'face' | 'full_body'): Promise<void> {
+  const current = await getPreviewReference();
+  if (!current) return;
+  const record: PreviewReference = { path: current.path, updatedAt: new Date().toISOString(), kind };
+  const db = await getDb();
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO preferences (id, value, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    REFERENCE_ID,
+    JSON.stringify(record),
+    'user_selected',
+    now,
+    now,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 预览任务（tasks 表 kind='try_on_preview'）
 // ---------------------------------------------------------------------------
@@ -151,6 +173,10 @@ export interface PreviewTask {
   errorKind: string | null;
   errorSummary: string | null;
   resultPreviewPath: string | null;
+  /** 生成成功但落盘失败时的供应商下载地址（R8：可仅重试下载，不重新生成） */
+  pendingUrl: string | null;
+  /** 入队快照（C2：单品集+各单品版本+穿法+参考版本；v5 通用列，旧任务为 null） */
+  inputJson: string | null;
   createdAt: string;
   finishedAt: string | null;
 }
@@ -166,17 +192,23 @@ interface TaskRow {
   error_kind: string | null;
   error_summary: string | null;
   result_json: string | null;
+  input_json: string | null;
   created_at: string;
   finished_at: string | null;
 }
 
 function rowToTask(row: TaskRow): PreviewTask {
   let resultPreviewPath: string | null = null;
+  let pendingUrl: string | null = null;
   try {
-    const parsed = row.result_json ? (JSON.parse(row.result_json) as { previewPath?: string }) : null;
+    const parsed = row.result_json
+      ? (JSON.parse(row.result_json) as { previewPath?: string; pendingUrl?: string })
+      : null;
     resultPreviewPath = parsed?.previewPath ?? null;
+    pendingUrl = typeof parsed?.pendingUrl === 'string' ? parsed.pendingUrl : null;
   } catch {
     resultPreviewPath = null;
+    pendingUrl = null;
   }
   return {
     id: row.id,
@@ -191,6 +223,8 @@ function rowToTask(row: TaskRow): PreviewTask {
     errorKind: row.error_kind,
     errorSummary: row.error_summary,
     resultPreviewPath,
+    pendingUrl,
+    inputJson: row.input_json ?? null,
     createdAt: row.created_at,
     finishedAt: row.finished_at,
   };
@@ -210,9 +244,12 @@ function newTaskId(): string {
   return `pt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** 预览输入指纹：单品集（排序）+ 穿法 + 参考版本 + 配置与提示词版本；用于去重与“方案已变化”判定 */
+/** 预览输入指纹：单品集（排序）+ 各单品资料版本 + 穿法 + 参考版本 + 配置与提示词版本。
+ * C2/R5（2026-11-04）：衣物资料版本（items.revision）与人物参考版本一起进入指纹——
+ * 更换照片、修改属性或删除衣物后视为不同输入，旧图不能冒充当前方案的生成结果。 */
 export function buildPreviewInputKey(input: {
   itemIds: string[];
+  itemRevisions: Record<string, number>;
   wearStyle: string;
   referenceUpdatedAt: string;
   configId: string;
@@ -220,6 +257,7 @@ export function buildPreviewInputKey(input: {
 }): string {
   return JSON.stringify({
     itemIds: [...input.itemIds].sort(),
+    itemRevisions: input.itemRevisions,
     wearStyle: input.wearStyle,
     referenceUpdatedAt: input.referenceUpdatedAt,
     configId: input.configId,
@@ -229,10 +267,42 @@ export function buildPreviewInputKey(input: {
   });
 }
 
+/** 判断任务输入是否与当前方案一致（“本方案”标注判定；C2：按完整输入版本比较，
+ * 含各单品资料版本与人物参考版本，不只比单品集合与穿法） */
+export function previewInputMatches(
+  task: { inputKey: string },
+  current: {
+    itemIds: string[];
+    itemRevisions: Record<string, number>;
+    wearStyle: string;
+    referenceUpdatedAt: string;
+  },
+): boolean {
+  try {
+    const parsed = JSON.parse(task.inputKey) as {
+      itemIds?: string[];
+      itemRevisions?: Record<string, number>;
+      wearStyle?: string;
+      referenceUpdatedAt?: string;
+    };
+    const sameIds = JSON.stringify([...(parsed.itemIds ?? [])].sort()) === JSON.stringify([...current.itemIds].sort());
+    const sameRevisions = JSON.stringify(parsed.itemRevisions ?? {}) === JSON.stringify(current.itemRevisions);
+    return sameIds && sameRevisions && parsed.wearStyle === current.wearStyle && parsed.referenceUpdatedAt === current.referenceUpdatedAt;
+  } catch {
+    return false;
+  }
+}
+
 export interface CreatePreviewTaskInput {
   basisItemId: string;
   itemIds: string[];
+  /** 各单品资料版本（入队快照；执行时校验，变化即 stale） */
+  itemRevisions: Record<string, number>;
   wearStyle: string;
+  /** 逐件穿法（C4；入队快照；执行时逐件进提示词） */
+  itemWear?: Record<string, string>;
+  /** C3 参考视角（face/full_body）；随快照进提示词的诚实表述 */
+  referenceKind?: string;
   referenceUpdatedAt: string;
   configId: string;
   configSnapshot: string;
@@ -244,7 +314,8 @@ export type CreatePreviewTaskResult =
   | { status: 'created'; taskId: string }
   | { status: 'existing'; taskId: string };
 
-/** 创建预览任务：requestKey 幂等；相同输入指纹且仍有 queued/running 时去重 */
+/** 创建预览任务：requestKey 幂等；相同输入指纹且仍有 queued/running 时去重。
+ * 入队快照存 tasks.input_json（v5 通用列）：执行时按快照校验发送，不现读会话。 */
 export async function createPreviewTask(input: CreatePreviewTaskInput): Promise<CreatePreviewTaskResult> {
   const db = await getDb();
 
@@ -271,8 +342,9 @@ export async function createPreviewTask(input: CreatePreviewTaskInput): Promise<
   await db.runAsync(
     `INSERT INTO tasks (
        id, kind, item_id, status, input_revision, attempt, photo_id, input_key, request_key,
-       config_id, config_snapshot, config_revision, contract_version, prompt_version, created_at, updated_at
-     ) VALUES (?, ?, ?, 'queued', 1, ?, 'none', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       config_id, config_snapshot, config_revision, contract_version, prompt_version,
+       input_json, created_at, updated_at
+     ) VALUES (?, ?, ?, 'queued', 1, ?, 'none', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     PREVIEW_TASK_KIND,
     input.basisItemId,
@@ -284,6 +356,15 @@ export async function createPreviewTask(input: CreatePreviewTaskInput): Promise<
     input.configRevision,
     PREVIEW_CONTRACT_VERSION,
     PREVIEW_PROMPT_VERSION,
+    // C2 入队快照：单品集 + 各单品版本 + 穿法（含逐件，C4）+ 参考版本与视角（C3）
+    JSON.stringify({
+      itemIds: input.itemIds,
+      itemRevisions: input.itemRevisions,
+      wearStyle: input.wearStyle,
+      itemWear: input.itemWear ?? {},
+      referenceKind: input.referenceKind ?? null,
+      referenceUpdatedAt: input.referenceUpdatedAt,
+    }),
     now,
     now,
   );
@@ -386,6 +467,43 @@ export function previewImageUri(relativePath: string): string {
   return `${Paths.document.uri}/${relativePath}`;
 }
 
+/** 持久化"生成成功但保存失败"的供应商下载地址（R8：之后可仅重试下载，不重新生成、不重复计费） */
+export async function savePendingDownload(taskId: string, remoteUrl: string, prompt: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?',
+    JSON.stringify({ pendingUrl: remoteUrl, prompt }),
+    new Date().toISOString(),
+    taskId,
+  );
+}
+
+/** 仅重试下载（R8）：对 save_failed 任务用已持久化的 URL 重新下载落盘并置 succeeded。
+ * 下载 URL 有时效，过期会失败——失败信息如实返回，任务保持 failed 可再次尝试或重新生成。 */
+export async function retryPreviewDownload(taskId: string): Promise<string> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<TaskRow>('SELECT * FROM tasks WHERE id = ?', taskId);
+  if (!row) throw new Error('任务不存在');
+  let pendingUrl: string | null = null;
+  let prompt = '';
+  try {
+    const parsed = row.result_json ? (JSON.parse(row.result_json) as { pendingUrl?: string; prompt?: string }) : null;
+    pendingUrl = typeof parsed?.pendingUrl === 'string' ? parsed.pendingUrl : null;
+    prompt = typeof parsed?.prompt === 'string' ? parsed.prompt : '';
+  } catch {
+    // 结果 JSON 损坏按无待下载处理
+  }
+  if (!pendingUrl) throw new Error('该任务没有可重试的下载地址（只能重新生成）');
+  const path = await savePreviewResultImage(taskId, pendingUrl, prompt);
+  const committed = await updateTaskStatus(taskId, ['failed'], 'succeeded', {
+    errorKind: null,
+    errorSummary: null,
+    finishedAt: new Date().toISOString(),
+  });
+  if (!committed) throw new Error('任务状态已变化，下载结果未保存');
+  return path;
+}
+
 /**
  * 删除一条预览任务记录与其生成图文件（用户明确要求删除；不可恢复）。
  * 进行中（queued/running）的任务由调用方拦截，不在此处处理。
@@ -399,4 +517,62 @@ export async function deletePreviewTask(taskId: string): Promise<void> {
     const file = new File(Paths.document, task.resultPreviewPath);
     if (file.exists) file.delete();
   }
+}
+
+// ---------------------------------------------------------------------------
+// C5 同条件比较（2026-11-04，schema v7 preview_comparisons）
+// ---------------------------------------------------------------------------
+
+export interface PreviewComparison {
+  id: string;
+  taskAId: string;
+  taskBId: string;
+  /** 比较组共享的人物参考版本（创建时校验一致） */
+  referenceUpdatedAt: string;
+  createdAt: string;
+}
+
+function referenceVersionOf(task: PreviewTask): string | null {
+  try {
+    return (JSON.parse(task.inputKey) as { referenceUpdatedAt?: string }).referenceUpdatedAt ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export type CreateComparisonResult =
+  | { ok: true; comparison: PreviewComparison }
+  | { ok: false; message: string };
+
+/** 创建比较组（决策 D-8）：两张同人物参考版本、已成功的生成结果。
+ * 记录共享条件供追溯；参数一致不保证视觉条件完全一致（展示时如实说明）。 */
+export async function createPreviewComparison(taskAId: string, taskBId: string): Promise<CreateComparisonResult> {
+  if (taskAId === taskBId) return { ok: false, message: '请选择两条不同的生成记录' };
+  const [a, b] = await Promise.all([getPreviewTask(taskAId), getPreviewTask(taskBId)]);
+  if (!a || !b) return { ok: false, message: '生成记录不存在' };
+  if (a.status !== 'succeeded' || !a.resultPreviewPath || b.status !== 'succeeded' || !b.resultPreviewPath) {
+    return { ok: false, message: '只有生成成功的记录才能比较' };
+  }
+  const refA = referenceVersionOf(a);
+  const refB = referenceVersionOf(b);
+  if (!refA || refA !== refB) {
+    return { ok: false, message: '两条记录的人物参考版本不同，不属于同条件比较' };
+  }
+  const db = await getDb();
+  const comparison: PreviewComparison = {
+    id: `cmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    taskAId,
+    taskBId,
+    referenceUpdatedAt: refA,
+    createdAt: new Date().toISOString(),
+  };
+  await db.runAsync(
+    'INSERT INTO preview_comparisons (id, task_a_id, task_b_id, reference_updated_at, created_at) VALUES (?, ?, ?, ?, ?)',
+    comparison.id,
+    comparison.taskAId,
+    comparison.taskBId,
+    comparison.referenceUpdatedAt,
+    comparison.createdAt,
+  );
+  return { ok: true, comparison };
 }

@@ -42,7 +42,10 @@ export async function generateImage(
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
         model: config.modelId,
-        prompt: input.prompt.slice(0, 1500),
+        // C7（2026-11-04）：不再静默截断到 1500 字符——截掉末尾衣物会让后面的单品"整件消失"。
+        // 提示词长度由装配层按预算组织（previewTaskRunner.buildPrompt：先保全部单品身份，
+        // 超预算按可解释规则压缩次要描述，仍超则显式失败），客户端原样发送。
+        prompt: input.prompt,
         ...(input.personImage
           ? { subject_reference: [{ type: 'character', image_file: input.personImage }] }
           : {}),

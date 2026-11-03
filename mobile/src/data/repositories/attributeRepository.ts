@@ -2,7 +2,9 @@
 // 职责：动态属性行读写（人工/AI）、测量与颜色读写、展示视图组装、结果原子提交。
 // 规则：
 // - 属性存在即"已分析到"，不存在即"未提取"；未知显式表达，不用空串冒充
-// - 同名属性取最新一行；人工/AI 历史行都保留（可追溯），物理删除需明确操作（递增 revision）
+// - 有效值 = 同名属性行中最新的人工行（user_confirmed/user_entered）；
+//   无人工行时取最新 AI 行。人工/AI 历史行都保留（可追溯），物理删除需明确操作（递增 revision）。
+//   （A1，2026-11-04：重新分析的新 AI 行是"待比较建议"，不再静默盖过人工有效值）
 // - 用户确认值不被 AI 覆盖：AI 行只取"当前照片最新成功任务"，且仅承认 2.0 契约版本
 // - 提交保护：任务不存在/非 running → discarded；衣物删除/归档 → cancelled；
 //   revision 或主图不一致 → stale；通过 → succeeded + 写动态属性行（仅 single）
@@ -140,7 +142,7 @@ async function latestFieldValue(itemId: string, field: string): Promise<Attribut
  * - lastValidResult：当前照片最新"有效"成功任务（契约版本 2.0.0-draft、single）
  * - colors：用户确认行优先，否则回退 AI 结果颜色
  * - suggestedName：来自 AI 结果（采纳后写入 items.name）
- * - attributes：动态细节行，同名取最新；按品类推荐键排序
+ * - attributes：动态细节行有效值（同名人工行优先，其次最新 AI 行）；按品类推荐键排序
  * - measurements：测量列表（仅用户录入）
  */
 export async function getAnalysisView(itemId: string): Promise<AnalysisView> {
@@ -174,7 +176,8 @@ export async function getAnalysisView(itemId: string): Promise<AnalysisView> {
     }
   }
 
-  // 全量属性行：同名取最新；分类为动态行 / 用户颜色 / 测量
+  // 全量属性行（新→旧）：动态行按"人工有效值优先、AI 建议其次"取有效行；
+  // 分类为动态行 / 用户颜色 / 测量
   const rows = await db.getAllAsync<AttributeRow>(
     `SELECT field, value, source_type, recorded_at, analysis_task_id, rowid AS rid
        FROM attributes WHERE item_id = ?
@@ -183,6 +186,7 @@ export async function getAnalysisView(itemId: string): Promise<AnalysisView> {
   );
 
   const dynamicByName = new Map<string, DynamicAttribute>();
+  const aiByName = new Map<string, DynamicAttribute>();
   let userColors: GarmentColor[] | null = null;
   let userColorsSource: AttrSource = 'user_entered';
   let measurements: { list: Measurement[]; source: AttrSource } | null = null;
@@ -211,15 +215,24 @@ export async function getAnalysisView(itemId: string): Promise<AnalysisView> {
       }
       continue;
     }
-    if (!dynamicByName.has(row.field)) {
-      dynamicByName.set(row.field, {
-        name: row.field,
-        value: row.value ?? '',
-        source,
-        recordedAt: row.recorded_at,
-        analysisTaskId: row.analysis_task_id,
-      });
+    const attribute: DynamicAttribute = {
+      name: row.field,
+      value: row.value ?? '',
+      source,
+      recordedAt: row.recorded_at,
+      analysisTaskId: row.analysis_task_id,
+    };
+    // A1：同名行人工优先——第一个遇到的人工行即有效值；AI 行单独记录作回退
+    const isUserRow = source === 'user_confirmed' || source === 'user_entered';
+    if (isUserRow && !dynamicByName.has(row.field)) {
+      dynamicByName.set(row.field, attribute);
+    } else if (!isUserRow && !aiByName.has(row.field)) {
+      aiByName.set(row.field, attribute);
     }
+  }
+  // 无人工行的属性取最新 AI 行；有人工行的属性保留人工值（新 AI 行只作历史比较，不覆盖）
+  for (const [name, aiAttribute] of aiByName) {
+    if (!dynamicByName.has(name)) dynamicByName.set(name, aiAttribute);
   }
 
   // 排序：品类推荐键在前（按其顺序），其余按写入时间

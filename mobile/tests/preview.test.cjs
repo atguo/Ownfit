@@ -185,6 +185,8 @@ function baseCreateInput(over = {}) {
   return {
     basisItemId: 'item-a',
     itemIds: ['item-a', 'item-b'],
+    // C2：入队快照固定各单品资料版本（执行时校验，变化即 stale）
+    itemRevisions: { 'item-a': 1, 'item-b': 1 },
     wearStyle: '自然垂放',
     referenceUpdatedAt: '2026-10-30T10:00:00.000Z',
     configId: 'cfg-img',
@@ -192,6 +194,18 @@ function baseCreateInput(over = {}) {
     configRevision: 'rev-1',
     requestKey: 'req-1',
     ...over,
+  };
+}
+
+/** C2/C8 执行器依赖桩：发送前复核放行、核对能力缺席（诚实未核对）、无待下载 */
+function driftCheckStubs() {
+  return {
+    validateInput: async () => ({ ok: true }),
+    savePendingDownload: async () => {},
+    getChecker: async () => ({ status: 'missing' }),
+    loadCheckImages: async () => ({ garments: [], person: null, result: null }),
+    runCheck: async () => ({ ok: false, kind: 'none', message: '未配置' }),
+    saveCheck: async () => {},
   };
 }
 
@@ -371,12 +385,22 @@ test('执行器：生成成功后落盘并标 succeeded；结果路径可读', a
       getApiKey: async () => 'sk-test',
       readReferenceDataUrl: async () => ({ dataUrl: 'data:image/jpeg;base64,AAA', updatedAt: 'x' }),
       describeItems: async (ids) =>
-        ids.map((id) => ({ itemId: id, name: `衣${id}`, category: '上衣', description: `白色的上衣，领型翻领（衣${id}描述）` })),
+        ids.map((id) => ({
+          itemId: id,
+          name: `衣${id}`,
+          category: '上衣',
+          mainColor: { name: '白', hex: '#FFFFFF' },
+          accentColorNames: [],
+          keyFeatures: ['图案=纯色', '领型=翻领'],
+          secondary: [`描述=衣${id}描述`],
+          wearStyle: null,
+        })),
       generate: async (input) => {
         calls.push(input);
         return { ok: true, imageUrl: 'https://cdn.example.com/gen1.jpg' };
       },
       saveResultImage: (id, url, prompt) => ctx.preview.savePreviewResultImage(id, url, prompt),
+      ...driftCheckStubs(),
     });
 
     runner.setForeground(true);
@@ -387,10 +411,11 @@ test('执行器：生成成功后落盘并标 succeeded；结果路径可读', a
     assert.ok(task.resultPreviewPath, '结果路径已记录');
     assert.equal(calls.length, 1, '只调用一次生成');
     assert.equal(calls[0].personDataUrl.startsWith('data:image/jpeg'), true, '人物参考以 data URL 传入');
+    // C7：提示词按重要性组织——单品身份行含品类/名称/主色 hex/关键特征
     assert.equal(
-      calls[0].prompt.includes('上衣：白色的上衣，领型翻领（衣item-a描述）'),
+      calls[0].prompt.includes('1. 上衣；名称=衣item-a；主色=白(#FFFFFF)；图案=纯色，领型=翻领；细节：描述=衣item-a描述'),
       true,
-      '提示词含衣物完整外观描述（颜色+属性）',
+      '提示词含单品身份行（品类/名称/主色/关键特征）',
     );
     assert.equal(calls[0].prompt.includes('从头到脚完整呈现'), true, '提示词要求全身完整不裁切');
   } finally {
@@ -414,6 +439,7 @@ test('执行器：生成失败标 failed；结果未知（超时）标 interrupt
       describeItems: async () => [],
       generate: async () => ({ ok: false, kind: 'auth', message: 'HTTP 401' }),
       saveResultImage: async () => '',
+      ...driftCheckStubs(),
     });
     failRunner.setForeground(true);
     await waitFor(async () => (await ctx.preview.getPreviewTask(failedTask.taskId)).status === 'failed');
@@ -435,6 +461,7 @@ test('执行器：生成失败标 failed；结果未知（超时）标 interrupt
       describeItems: async () => [],
       generate: async () => ({ ok: false, kind: 'timeout', message: '请求超时' }),
       saveResultImage: async () => '',
+      ...driftCheckStubs(),
     });
     timeoutRunner.setForeground(true);
     await waitFor(async () => (await ctx.preview.getPreviewTask(timeoutTask.taskId)).status === 'interrupted');
@@ -464,6 +491,7 @@ test('执行器：人物参考缺失标 failed(reference_missing)，不发生成
         return { ok: true, imageUrl: 'https://cdn.example.com/x.jpg' };
       },
       saveResultImage: async () => '',
+      ...driftCheckStubs(),
     });
     runner.setForeground(true);
     await waitFor(async () => (await ctx.preview.getPreviewTask(task.taskId)).status === 'failed');
@@ -497,6 +525,7 @@ test('执行器：启动恢复把遗留 running 标为 interrupted（不重发�
         return { ok: true, imageUrl: 'https://cdn.example.com/x.jpg' };
       },
       saveResultImage: async () => '',
+      ...driftCheckStubs(),
     });
     await runner.recover();
     const recovered = await ctx.preview.getPreviewTask(task.taskId);

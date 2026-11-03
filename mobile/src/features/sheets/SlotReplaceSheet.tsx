@@ -1,5 +1,7 @@
 // 槽位替换（M3 真实版）：只列同槽位真实候选；只替换未锁定项（锁定件调用方先拦截）。
 // 无候选时按功能文档措辞表达缺口："已录入衣橱中暂未找到…"+ 添加入口。
+// B5（2026-11-04）：增加"AI 推荐替代"——以当前搭配为基线、其余槽位全部锁定、
+// 只换该槽位（如"裤子不动，只换鞋"），走同一推荐任务链路（决策 D-6）。
 
 import { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -9,7 +11,7 @@ import { Button } from '../../ui/components/Button';
 import { useToast } from '../../ui/components/Toast';
 import { getItem, listItemIdsByStatus, type WardrobeItem } from '../../data/repositories/itemRepository';
 import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
-import { replaceSlot, slotForCategory, slotGapMessage, type OutfitSlot } from '../outfitSession';
+import { replaceSlot, slotForCategory, slotGapMessage, slotLabels, type OutfitSlot } from '../outfitSession';
 import { colors, radius, type } from '../../ui/tokens';
 
 export function SlotReplaceSheet({
@@ -17,11 +19,14 @@ export function SlotReplaceSheet({
   currentItemId,
   onClose,
   onGoAdd,
+  onAiSwap,
 }: {
   slot: OutfitSlot | null;
   currentItemId: string | null;
   onClose: () => void;
   onGoAdd: () => void;
+  /** B5：AI 推荐替代（其余槽位锁定、只换该槽位）；未配置文本模型时调用方提示 */
+  onAiSwap?: (slot: OutfitSlot) => void;
 }) {
   const toast = useToast();
   const [candidates, setCandidates] = useState<WardrobeItem[]>([]);
@@ -95,6 +100,15 @@ export function SlotReplaceSheet({
       {candidates.length === 0 ? (
         <Button variant="primary" label="添加我已有的" onPress={onGoAdd} />
       ) : null}
+      {slot && onAiSwap ? (
+        <Button
+          variant="secondary"
+          icon="spark"
+          label={`AI 推荐${slotLabels[slot]}替代（其他件不变）`}
+          onPress={() => onAiSwap(slot)}
+          style={styles.aiSwap}
+        />
+      ) : null}
       <Button variant="text" label="保留原来的搭配" onPress={onClose} />
     </Sheet>
   );
@@ -141,5 +155,8 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 9,
     marginBottom: 5,
+  },
+  aiSwap: {
+    marginTop: 6,
   },
 });

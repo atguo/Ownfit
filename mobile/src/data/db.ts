@@ -235,6 +235,44 @@ async function migrateToV6(db: SQLite.SQLiteDatabase): Promise<void> {
 }
 
 /**
+ * schema v7（核心目标能力改进，2026-11-04，决策 D-4/D-7/D-8/D-9）：
+ * - plan_items 增 wear_style：逐件穿法（契约 1.1.0 per-item wearStyle；顶层 wear 保留兼容）
+ * - worn_records 增 reasons：最小反馈原因（JSON 数组，可跳过；D3 提前实现）
+ * - preview_checks：预览文字路径的生成后视觉核对记录（逐项判定/核对模型/纠偏次数）
+ * - preview_comparisons：同条件双方案比较组（共享人物参考版本等条件快照）
+ */
+async function migrateToV7(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await db.execAsync('ALTER TABLE plan_items ADD COLUMN wear_style TEXT');
+    await db.execAsync('ALTER TABLE worn_records ADD COLUMN reasons TEXT');
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS preview_checks (
+          id TEXT PRIMARY KEY NOT NULL,
+          task_id TEXT NOT NULL,
+          person_ref_version TEXT,
+          garment_versions TEXT NOT NULL,
+          checker_config_id TEXT NOT NULL,
+          checker_revision TEXT NOT NULL,
+          checker_rule_version TEXT NOT NULL,
+          verdicts_json TEXT NOT NULL,
+          overall TEXT NOT NULL,
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_preview_checks_task ON preview_checks(task_id);
+        CREATE TABLE IF NOT EXISTS preview_comparisons (
+          id TEXT PRIMARY KEY NOT NULL,
+          task_a_id TEXT NOT NULL,
+          task_b_id TEXT NOT NULL,
+          reference_updated_at TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+      `);
+    await db.execAsync('PRAGMA user_version = 7');
+  });
+}
+
+/**
  * 各版本迁移步骤（顺序执行，每步把库推进到对应 user_version）。
  * 导出用于测试：测试必须调用这里的生产迁移步骤构造 v1/v2 库，
  * 不能在测试里另复制一套建表 SQL（分批执行手册 P2）。
@@ -249,6 +287,7 @@ export const schemaMigrations: ReadonlyArray<{
   { version: 4, up: migrateToV4 },
   { version: 5, up: migrateToV5 },
   { version: 6, up: migrateToV6 },
+  { version: 7, up: migrateToV7 },
 ];
 
 /**

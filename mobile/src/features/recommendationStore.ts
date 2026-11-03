@@ -37,18 +37,49 @@ export function notifyRecommendationChanged(): void {
   for (const listener of [...listeners]) listener();
 }
 
-/** 读取已入库单品的结构化档案：别名 item-1..N（按创建顺序）→ 真实 id 映射 */
-export async function loadWardrobeProfile(): Promise<{ items: ProfileItem[]; idByAlias: Map<string, string> }> {
+/** B2 输入预算（决策 D-12）：档案超过上限时只送入一部分（锁定优先、其余按创建顺序），
+ * 提示词如实注明，不静默丢弃；别名编号保持全柜口径（截取不重排）。 */
+export const RECOMMENDATION_PROFILE_CAP = 40;
+
+async function activeItemIds(): Promise<string[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{ id: string }>(
     "SELECT id FROM items WHERE status = 'active' ORDER BY created_at ASC",
   );
+  return rows.map((row) => row.id);
+}
+
+/** 读取已入库单品的结构化档案：别名 item-1..N（按创建顺序）→ 真实 id 映射。
+ * lockedRealIds：请求锁定的真实单品（超限时优先送入）；
+ * full=true：不做截取（入队建别名映射/指纹用，保证锁定映射不因预算丢项）。 */
+export async function loadWardrobeProfile(
+  options: { lockedRealIds?: string[]; full?: boolean } = {},
+): Promise<{
+  items: ProfileItem[];
+  idByAlias: Map<string, string>;
+  truncated: boolean;
+  totalCount: number;
+  sentCount: number;
+}> {
+  const allIds = await activeItemIds();
+  const lockedSet = new Set(options.lockedRealIds ?? []);
+  // 选择送入子集：锁定必进；其余按创建顺序填到上限；别名按全柜编号（不重排）
+  const selectedIds =
+    options.full || allIds.length <= RECOMMENDATION_PROFILE_CAP
+      ? allIds
+      : (() => {
+          const lockedFirst = allIds.filter((id) => lockedSet.has(id));
+          const rest = allIds.filter((id) => !lockedSet.has(id));
+          const room = RECOMMENDATION_PROFILE_CAP - lockedFirst.length;
+          return [...lockedFirst, ...rest.slice(0, Math.max(0, room))];
+        })();
   const items: ProfileItem[] = [];
   const idByAlias = new Map<string, string>();
-  for (const [index, row] of rows.entries()) {
-    const [view, item] = await Promise.all([getAnalysisView(row.id), getItem(row.id)]);
+  for (const realId of selectedIds) {
+    const index = allIds.indexOf(realId);
+    const [view, item] = await Promise.all([getAnalysisView(realId), getItem(realId)]);
     const alias = `item-${index + 1}`;
-    idByAlias.set(alias, row.id);
+    idByAlias.set(alias, realId);
     items.push({
       id: alias,
       // A1：用户实际名称优先于 AI 名称建议（建议稿 B3；AI 建议仅在用户未命名时使用）
@@ -58,7 +89,32 @@ export async function loadWardrobeProfile(): Promise<{ items: ProfileItem[]; idB
       colors: view.colors.value.map((c) => ({ name: c.name, hex: c.hex })),
     });
   }
-  return { items, idByAlias };
+  return {
+    items,
+    idByAlias,
+    truncated: !options.full && allIds.length > RECOMMENDATION_PROFILE_CAP,
+    totalCount: allIds.length,
+    sentCount: selectedIds.length,
+  };
+}
+
+/** 执行器取档案（B2）：把请求锁定的别名换算回真实 id 后按预算截取，
+ * 保证锁定单品在超限时仍被送入；别名编号保持全柜口径。 */
+export async function loadProfileForRunner(lockedAliases: string[] = []): Promise<{
+  items: ProfileItem[];
+  idByAlias: Map<string, string>;
+  truncated: boolean;
+  sentCount: number;
+  totalCount: number;
+}> {
+  const allIds = await activeItemIds();
+  const lockedRealIds = lockedAliases
+    .map((alias) => {
+      const index = Number(alias.replace(/^item-/, ''));
+      return Number.isInteger(index) && index >= 1 && index <= allIds.length ? allIds[index - 1] : undefined;
+    })
+    .filter((id): id is string => !!id);
+  return loadWardrobeProfile({ lockedRealIds });
 }
 
 /**
@@ -101,7 +157,8 @@ export function initRecommendationRunner(): RecommendationRunner {
       updateStatus: updateRecommendationTaskStatus,
       getConfig,
       getApiKey,
-      loadProfile: loadWardrobeProfile,
+      // B2：执行器按预算取档案（锁定别名换算回真实 id 优先送入）
+      loadProfile: loadProfileForRunner,
       loadScene: loadSceneSnapshot,
       commitResult: commitRecommendationResult,
       onSettled: notifyRecommendationChanged,
@@ -144,7 +201,7 @@ export async function enqueueRecommendation(
   const config = getConfig(input.configId);
   if (!config) return { status: 'existing', taskId: 'missing-config' };
 
-  const { items, idByAlias } = await loadWardrobeProfile();
+  const { items, idByAlias } = await loadWardrobeProfile({ full: true });
   // 锁定集映射：真实 id → 别名（提示词只用别名）；不在当前档案中的锁定项忽略
   const aliasByRealId = new Map([...idByAlias].map(([alias, realId]) => [realId, alias]));
   const lockedAliases = (input.lockedItemIds ?? [])

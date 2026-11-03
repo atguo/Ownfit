@@ -1,8 +1,10 @@
-// 衣见业务契约 v1.0.0：搭配请求、方案结果与方案修改的稳定结构。
+// 衣见业务契约：搭配请求、方案结果与方案修改的稳定结构。
 // 依据 docs/开发计划.md §6.3 与 docs/functions/基于已有衣橱生成搭配.md §5.1。
 //
-// 冻结状态：v1（2026-10-30 冻结，M3 验收）。真实模型输出的适配尚未验证（A 线样本待采集），
-// 冻结前字段可能随实现反馈调整；任何变更须记录原因、影响与回归范围并升级版本。
+// 版本：v1.0.0（2026-10-30 冻结，M3 验收）→ v1.1.0（2026-11-04）：
+//   Plan.items 每项增加可选 wearStyle（逐件穿法，取值同 wearStyles 白名单），
+//   支持"内搭前塞 + 外套敞开"同时表达（能力改进建议 C4）；顶层 wear 保留（兼容读取，
+//   语义为整体/主穿法）。旧 v1.0.0 数据无需迁移（新增字段可选）。
 //
 // 缺省语义（§6.3：未知值、空列表和失败不能混用）：
 // - reason = null      → 推荐原因未提供，UI 显示缺省文案，不得编造理由
@@ -12,7 +14,7 @@
 
 import { z, type ZodType } from 'zod';
 
-export const CONTRACT_VERSION = '1.0.0';
+export const CONTRACT_VERSION = '1.1.0';
 
 /** 穿法的作用部位。当前仅支持整体；未来扩展（如袖口、下摆）在此追加。 */
 export const wearSlots = ['整体'] as const;
@@ -36,6 +38,8 @@ export const planItemSchema = z.object({
   /** 单品引用：指向本地衣橱 items.id */
   itemId: z.string().min(1),
   role: planItemRoleSchema,
+  /** v1.1.0 逐件穿法（可选；缺省按顶层 wear 处理）。取值同 wearStyles 白名单。 */
+  wearStyle: z.enum(wearStyles).optional(),
 });
 export type PlanItem = z.infer<typeof planItemSchema>;
 

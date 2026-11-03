@@ -177,3 +177,51 @@ test('并发防重入：同时多次调用只执行一次定位与请求', async
   assert.equal(a.ran, true);
   assert.equal(b.ran, true);
 });
+
+// R6（2026-11-04）：天气绑定正确性——日期/城市/有效期
+
+test('R6：查看「明天」时自动天气只写城市，不把今日温度冒充明天', async () => {
+  const { auto, demo } = baseHarness({
+    initialContext: {
+      city: '上海市', day: '明天', scene: '外出', temp: '8–12℃',
+      weatherDesc: '手动填写', tempSource: 'manual',
+    },
+  });
+  const result = await auto.refreshCurrentWeather({ force: true });
+  assert.equal(result.ran, true);
+  const ctx = demo.ctx();
+  assert.equal(ctx.city, '杭州市', '城市写回供核对');
+  assert.equal(ctx.temp, '8–12℃', '手动温度保持现状');
+  assert.equal(ctx.tempSource, 'manual', '今日预报不得写成明天的实时温度');
+  assert.match(result.weatherMessage, /手动填写/);
+});
+
+test('R6：城市变化且天气失败时不再保留旧城市的实时温度（回退占位）', async () => {
+  const { auto, demo } = baseHarness({
+    weatherOk: false,
+    initialContext: {
+      city: '上海市', day: '今天', scene: '通勤', temp: '10–15℃',
+      weatherDesc: '小雨', tempSource: 'real', weatherFetchedAt: new Date().toISOString(),
+    },
+  });
+  const result = await auto.refreshCurrentWeather({ force: true });
+  const ctx = demo.ctx();
+  assert.equal(ctx.city, '杭州市');
+  assert.equal(ctx.tempSource, 'demo', '旧城市的实时温度不得继续展示');
+  assert.match(result.weatherMessage, /手动填写温度/);
+});
+
+test('R6：过期实时天气刷新失败 → 降级占位，不继续标 real', async () => {
+  const stale = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  const { auto, demo } = baseHarness({
+    weatherOk: false,
+    initialContext: {
+      city: '杭州市', day: '今天', scene: '通勤', temp: '10–15℃',
+      weatherDesc: '小雨', tempSource: 'real', weatherFetchedAt: stale,
+    },
+  });
+  const result = await auto.refreshCurrentWeather();
+  const ctx = demo.ctx();
+  assert.equal(ctx.city, '杭州市');
+  assert.equal(ctx.tempSource, 'demo', '过期且刷新失败不得保持 real 来源');
+});

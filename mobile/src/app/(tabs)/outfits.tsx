@@ -8,6 +8,7 @@ import { EmptyState, Tag } from '../../ui/components/Basics';
 import { RecommendationSheet } from '../../features/sheets/RecommendationSheet';
 import { FeedbackSheet } from '../../features/sheets/FeedbackSheet';
 import { loadOutfitFrom } from '../../features/outfitSession';
+import type { WearStyle } from '@ownfit/contract';
 import { listPlans, type SavedPlan } from '../../data/repositories/planRepository';
 import { getItem } from '../../data/repositories/itemRepository';
 import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
@@ -42,8 +43,9 @@ export default function OutfitsScreen() {
   );
 
   async function reuse(plan: SavedPlan) {
-    // 槽位按单品品类推导（与 startOutfitFrom 的规则一致）
-    const slots: Partial<Record<'top' | 'dress' | 'bottom' | 'shoes', string>> = {};
+    // 槽位按单品品类推导（与 startOutfitFrom 的规则一致；外套为独立槽位）
+    const slots: Partial<Record<'top' | 'dress' | 'bottom' | 'shoes' | 'outer', string>> = {};
+    const slotWear: Partial<Record<'top' | 'dress' | 'bottom' | 'shoes' | 'outer', WearStyle>> = {};
     for (const item of plan.items) {
       const wardrobeItem = await getItem(item.itemId);
       if (!wardrobeItem || wardrobeItem.status !== 'active' || !wardrobeItem.category) {
@@ -51,15 +53,24 @@ export default function OutfitsScreen() {
         return;
       }
       const slot = slotForCategory(wardrobeItem.category);
-      if (slot && !slots[slot]) slots[slot] = item.itemId;
+      if (slot && !slots[slot]) {
+        slots[slot] = item.itemId;
+        // C4：逐件穿法随方案恢复
+        if (item.wearStyle) slotWear[slot] = item.wearStyle;
+      }
     }
+    // D2/R9：复用保留原方案含义——来源与理由随会话保留（AI 方案不再变 manual），
+    // 锁定恢复方案内 basis/locked 角色，父版本与逐件穿法随保存延续
     loadOutfitFrom({
       planId: plan.id,
       name: plan.name,
       basisId: plan.basisItemId,
       slots,
       wear: plan.wear.style,
+      slotWear,
       itemIds: plan.items.map((i) => i.itemId),
+      origin: { source: plan.source === 'ai' ? 'ai' : 'manual', reason: plan.reason },
+      locks: plan.items.filter((i) => i.role === 'basis' || i.role === 'locked').map((i) => i.itemId),
     });
     router.push('/outfit');
   }

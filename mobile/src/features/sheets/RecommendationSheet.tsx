@@ -8,12 +8,12 @@ import { useRouter } from 'expo-router';
 import { Sheet } from '../../ui/components/Sheet';
 import { Button } from '../../ui/components/Button';
 import { Notice, Spinner, Tag } from '../../ui/components/Basics';
+import { Field, TextField } from '../../ui/components/Field';
 import { useToast } from '../../ui/components/Toast';
 import {
   enqueueRecommendation,
   getItemAvailability,
   hasActiveRecommendation,
-  initRecommendationRunner,
   loadLatestRecommendation,
   loadSceneSnapshot,
   loadWardrobeProfile,
@@ -22,6 +22,7 @@ import {
   subscribeRecommendationChanges,
 } from '../recommendationStore';
 import { getOutfitSession, loadOutfitFrom, slotForCategory } from '../outfitSession';
+import { checkGarmentEvidence } from '../../services/ai/evidenceCheck';
 import type { WearStyle } from '@ownfit/contract';
 import { getItem } from '../../data/repositories/itemRepository';
 import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
@@ -70,24 +71,32 @@ export function RecommendationSheet({
     tempSource?: string;
   } | null>(null);
   const [starting, setStarting] = useState(false);
+  // B1/D-5：当次要求（选填）——随请求入队快照，只作用于本次
+  const [note, setNote] = useState('');
+  // A3/D-11：锁定单品的证据缺口（只对锁定项提示，可跳过，不拦截）
+  const [lockedWarnings, setLockedWarnings] = useState<string[]>([]);
 
   const reload = useCallback(async () => {
     setTask(await loadLatestRecommendation());
     setActive(await hasActiveRecommendation());
     setScene(await loadSceneSnapshot());
+    const session = getOutfitSession();
+    if (session.active && session.locks.length > 0) {
+      const warnings: string[] = [];
+      for (const itemId of session.locks) {
+        const evidence = await checkGarmentEvidence(itemId);
+        if (evidence?.missing.length) warnings.push(`「${evidence.name}」${evidence.missing[0]}`);
+      }
+      setLockedWarnings(warnings);
+    } else {
+      setLockedWarnings([]);
+    }
   }, []);
 
   useEffect(() => {
-    if (!visible) {
-      initRecommendationRunner().setForeground(false);
-      return;
-    }
-    const runner = initRecommendationRunner();
-    runner.start();
-    void runner
-      .recover()
-      .catch(() => undefined)
-      .then(() => runner.setForeground(true));
+    // R1（2026-11-04）：执行器生命周期由应用层统一管理（app/_layout）；
+    // 面板只订阅变化与解析模型候选，不再自行 recover/setForeground——
+    // 生成期间关闭再打开面板不会把本进程仍在运行的任务误标为 interrupted。
     void resolveTextForRecommendation().then(setResolution);
     void reload();
     return subscribeRecommendationChanges(() => void reload());
@@ -101,7 +110,7 @@ export function RecommendationSheet({
         // 当前搭配会话有锁定单品时带入推荐（模型围绕锁定项组合；入队快照持久化）
         const session = getOutfitSession();
         const lockedItemIds = session.active && session.locks.length > 0 ? session.locks : undefined;
-        const result = await enqueueRecommendation({ scene, configId, lockedItemIds });
+        const result = await enqueueRecommendation({ scene, configId, lockedItemIds, note });
         toast(result.status === 'created' ? 'AI 正在为你搭配…' : '同样的推荐已在进行中');
         await reload();
       } finally {
@@ -152,9 +161,12 @@ export function RecommendationSheet({
     start(resolution.config.id);
   }
 
-  /** 采用候选：复核单品可用性 → 槽位按品类映射 → 进入搭配编辑 */
+  /** 采用候选：复核可用性 → 槽位按品类映射（B3/R2：外套独立槽位，不再并入上衣丢件）→
+   * 校验锁定覆盖与槽位冲突 → 保留锁定集合进入搭配编辑（R3） */
   async function adopt(candidate: RecommendationCandidate) {
-    const slots: Partial<Record<'top' | 'dress' | 'bottom' | 'shoes', string>> = {};
+    const session = getOutfitSession();
+    const slots: Partial<Record<'top' | 'dress' | 'bottom' | 'shoes' | 'outer', string>> = {};
+    const adoptedIds: string[] = [];
     for (const slot of candidate.slots) {
       if (!(await getItemAvailability(slot.itemId))) {
         Alert.alert('这套搭配含不可用衣物', '部分衣物已删除或归档。请从衣橱重新选择可用衣物搭配。');
@@ -162,9 +174,27 @@ export function RecommendationSheet({
       }
       const item = await getItem(slot.itemId);
       const mapped = item?.category ? slotForCategory(item.category) : null;
-      const role = (mapped ?? slot.role) as 'top' | 'dress' | 'bottom' | 'shoes';
-      if (!slots[role]) slots[role] = slot.itemId;
+      if (!mapped) {
+        Alert.alert(
+          '候选包含本期不支持的品类',
+          `「${item?.name ?? slot.itemId}」是包/配饰类，本期搭配组合暂不支持，请重新生成或手动调整。`,
+        );
+        return;
+      }
+      if (slots[mapped]) {
+        Alert.alert('候选槽位冲突', '候选把两件衣物放进了同一槽位（按品类判断），已拒绝采用。请换一个候选。');
+        return;
+      }
+      slots[mapped] = slot.itemId;
+      adoptedIds.push(slot.itemId);
     }
+    // 连衣裙与上衣/下装互斥：品类映射后复核一次，不静默丢弃
+    if (slots.dress && (slots.top || slots.bottom)) {
+      Alert.alert('候选组合冲突', '连衣裙与上衣/下装不能同时出现，已拒绝采用。请换一个候选。');
+      return;
+    }
+    // R3：请求时锁定的单品若在候选内则保持锁定（basis 默认锁定）
+    const keptLocks = session.active ? session.locks.filter((id) => adoptedIds.includes(id)) : [];
     loadOutfitFrom({
       planId: '',
       name: null,
@@ -174,6 +204,7 @@ export function RecommendationSheet({
       itemIds: candidate.slots.map((slot) => slot.itemId),
       // 保存时保留 AI 来源与理由（M6 批次 1.2：不再固定 manual/null）
       origin: { source: 'ai', reason: candidate.reason ?? null },
+      locks: keptLocks,
     });
     onClose();
     router.push('/outfit');
@@ -271,10 +302,35 @@ export function RecommendationSheet({
         disabled={starting || active || resolution?.status === 'choose'}
       />
       {active ? <Spinner /> : null}
+
+      {/* B1：请求摘要——本次发送给 AI 的约束可见可改；全部可跳过，不增加每日问卷 */}
       {scene ? (
-        <Text style={styles.note}>
-          {`场景：${scene.city} · ${scene.day} · ${scene.scene}${scene.temp ? ` · ${scene.temp}` : ' · 未查天气'}`}
-        </Text>
+        <View style={styles.requestBox}>
+          <Text style={styles.note}>
+            {`场景：${scene.city} · ${scene.day} · ${scene.scene}${scene.temp ? ` · ${scene.temp}` : ' · 未查天气'}`}
+          </Text>
+          <Text style={styles.note}>
+            {getOutfitSession().active && getOutfitSession().locks.length > 0
+              ? `锁定：${getOutfitSession().locks.length} 件（候选必须包含）`
+              : '锁定：无（可到搭配页锁定单品）'}
+          </Text>
+          {lockedWarnings.map((warning) => (
+            <Text key={warning} style={styles.warningNote}>
+              {warning}
+            </Text>
+          ))}
+          <Text style={styles.note}>
+            长期偏好会参与排序；下面的“本次要求”只对这次有效，可留空。
+          </Text>
+          <Field label="本次要求（选填，如：只换鞋 / 更正式一点 / 步行 20 分钟）">
+            <TextField
+              value={note}
+              onChangeText={setNote}
+              placeholder="留空则按场景与偏好搭配"
+              maxLength={120}
+            />
+          </Field>
+        </View>
       ) : null}
 
       <Text style={styles.sectionTitle}>最近推荐</Text>
@@ -392,6 +448,12 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 4,
   },
+  warningNote: {
+    ...type.micro,
+    color: '#B25E09',
+    lineHeight: 16,
+    marginTop: 2,
+  },
   sectionTitle: {
     ...type.sectionHead,
     color: colors.ink,
@@ -404,6 +466,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 10,
     marginBottom: 10,
+  },
+  requestBox: {
+    marginTop: 8,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 12,
   },
   candidateHead: {
     flexDirection: 'row',

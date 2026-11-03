@@ -1,5 +1,5 @@
 // M6 批次 1.4 回归：AI 非敏感配置从私有 JSON 迁入本地库（schema v6）。
-// - v5/v6 迁移：tasks.input_json 列与 ai_configs 表；中途失败回滚不清库
+// - v5/v6/v7 迁移：tasks.input_json 列、ai_configs 表与 v7 表/列；中途失败回滚不清库
 // - 首次缓存初始化：表空 + JSON 可解析 → 搬入并删旧文件；表非空不再读旧文件
 // - 读写路径：增改删同步落库与镜像；镜像未加载时结构化读取报 unreadable
 // 使用内存 SQLite 与真实 configStore 代码；不触碰真实文件与设备。
@@ -160,7 +160,7 @@ test('v5/v6 迁移：tasks.input_json 列与 ai_configs 表存在；中途失败
 
     adapter.setFailOn(null);
     await runMigrations(adapter);
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 7);
     assert.equal(
       db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'ai_configs'").get().n,
       1,

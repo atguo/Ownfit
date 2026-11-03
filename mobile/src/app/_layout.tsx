@@ -6,6 +6,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ToastProvider } from '../ui/components/Toast';
 import { Button } from '../ui/components/Button';
 import { initGarmentTaskRunner } from '../features/garmentAnalysisStore';
+import { initRecommendationRunner } from '../features/recommendationStore';
+import { initPreviewRunner } from '../features/previewStore';
 import { refreshCurrentWeather } from '../features/weatherAuto';
 import { ensureConfigCache } from '../services/ai/configStore';
 import { getLastDbInitFailure, getDb, type DbInitFailure } from '../data/db';
@@ -13,8 +15,10 @@ import { colors, radius, type } from '../ui/tokens';
 
 // 根布局：Stack 承载四个 Tab 主入口与任务内页面；浅色主题由 app.json userInterfaceStyle
 // + expo-system-ui 在原生层锁定。
-// 同时负责初始化衣物分析任务执行器：模块单例（React 重挂载不重复启动）、启动恢复、
-// 前台才领取新任务。初始化失败只提示，不影响已保存的草稿与其他功能。
+// 三类 AI 任务执行器（衣物分析/推荐/预览）统一由应用生命周期管理（评审 R1，2026-11-04）：
+// 启动时初始化并仅恢复一次遗留 running，前台状态跟随 AppState；
+// 推荐/预览面板只订阅变化，不再自行 recover/setForeground——
+// 生成期间关闭再打开面板不会把本进程仍在运行的任务误标为 interrupted。
 // 数据库初始化失败时进入"资料安全模式"：明确提示失败阶段与"资料保持原样"，提供重试；
 // 不静默降级、不清库（M4）。
 
@@ -41,8 +45,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     let mounted = true;
-    const runner = initGarmentTaskRunner();
-    runner.start();
+    // R1：三类任务执行器统一挂载（单例）；启动恢复只发生在这里，面板开关不参与
+    const runners = [initGarmentTaskRunner(), initRecommendationRunner(), initPreviewRunner()];
+    for (const runner of runners) runner.start();
 
     (async () => {
       try {
@@ -51,8 +56,10 @@ export default function RootLayout() {
         const configsReady = await ensureConfigCache();
         if (!configsReady) throw new Error('AI 配置未能从本地库加载');
         // 启动时把遗留的 running 任务标为中断（不重发），然后在前台开始领取 queued
-        await runner.recover();
-        if (mounted) runner.setForeground(AppState.currentState === 'active');
+        for (const runner of runners) await runner.recover();
+        if (mounted) {
+          for (const runner of runners) runner.setForeground(AppState.currentState === 'active');
+        }
       } catch {
         if (mounted) setInitFailed(true);
       }
@@ -65,7 +72,7 @@ export default function RootLayout() {
     void probeDb();
 
     const subscription = AppState.addEventListener('change', (next) => {
-      runner.setForeground(next === 'active');
+      for (const runner of runners) runner.setForeground(next === 'active');
       // 回到前台：天气超过 2 小时或跨日时自动重查（weatherAuto 节流，新鲜则跳过）
       if (next === 'active') void refreshCurrentWeather().catch(() => undefined);
     });
@@ -73,7 +80,7 @@ export default function RootLayout() {
     return () => {
       mounted = false;
       subscription.remove();
-      runner.setForeground(false);
+      for (const runner of runners) runner.setForeground(false);
     };
   }, [probeDb]);
 

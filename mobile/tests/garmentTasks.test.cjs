@@ -206,7 +206,7 @@ if (require.main === module) {
   }
 });
 
-test('同名属性行取最新：用户确认覆盖 AI 显示，AI 重新分析再取最新，历史行保留', async () => {
+test('A1 有效值人工优先：重新分析的新 AI 行不覆盖已确认值，历史行保留可比较', async () => {
   const { db, close, tasks, attributes } = await setup();
   try {
     const first = await startTask(tasks);
@@ -226,20 +226,26 @@ test('同名属性行取最新：用户确认覆盖 AI 显示，AI 重新分析�
     assert.equal(
       db.prepare("SELECT COUNT(*) AS n FROM attributes WHERE item_id = 'item-a' AND field = '领型'").get().n,
       2,
-      'AI 行与用户行都保留（同名取最新展示）',
+      'AI 行与用户行都保留（历史可追溯）',
     );
 
-    // 用户修改推进 revision 后，重新分析以新输入为准，同名再取最新
+    // 重新分析产出同名 AI 行（新建议）：有效值保持人工确认值，不静默覆盖（A1，2026-11-04）
     const second = await startTask(tasks, { requestKey: 'req-2', inputRevision: 2 });
     await attributes.commitGarmentAnalysis(second.id, {
       ...singleResult,
       attributes: [{ name: '领型', value: '翻领（重拍后）' }],
     });
     view = await attributes.getAnalysisView('item-a');
-    const latest = view.attributes.find((a) => a.name === '领型');
-    assert.equal(latest.source, 'ai_inferred');
-    assert.equal(latest.value, '翻领（重拍后）');
+    const effective = view.attributes.find((a) => a.name === '领型');
+    assert.equal(effective.source, 'user_confirmed');
+    assert.equal(effective.value, '立领');
+    // 最新 AI 结果仍可在分析区比较（lastValidResult 指向新任务）
     assert.equal(view.lastValidResult.taskId, second.id);
+    assert.equal(view.lastValidResult.result.attributes[0].value, '翻领（重拍后）');
+
+    // 无人工行的属性：取最新 AI 行
+    const color = view.attributes.find((a) => a.name === '颜色') ?? view.attributes[0];
+    assert.ok(color, '无人工行的属性仍出现在有效视图');
   } finally {
     close();
   }

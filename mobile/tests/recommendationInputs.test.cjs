@@ -200,6 +200,7 @@ test('当次场景快照：演示温度不进输入；实时/手动温度带来�
       scene: '约会',
       temp: '10–15℃',
       tempSource: 'real',
+      weatherDesc: '小雨', // B6：实时天气描述随场景进输入（参与选择）
     });
 
     demo.set({ tempSource: 'manual', temp: '20℃' });
@@ -240,7 +241,7 @@ test('入队：锁定真实单品映射为别名，输入快照与指纹持久�
     const inputKey = JSON.parse(row.input_key);
     assert.deepEqual(inputKey.lockedAliases, ['item-2']);
     assert.equal(inputKey.body, null);
-    assert.equal(inputKey.promptVersion, '3');
+    assert.equal(inputKey.promptVersion, '4');
 
     const again = await store.enqueueRecommendation({
       scene: { city: '北京', day: '今天', scene: '约会', temp: '10–15℃', tempSource: 'real' },

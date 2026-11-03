@@ -78,6 +78,8 @@ export function recommendationUserPrompt(input: {
   preferences?: string[];
   /** 当次要求（如"只换鞋""更正式一点""步行 20 分钟"）；仅本次请求有效 */
   note?: string | null;
+  /** B2：档案截取时的如实说明（不静默丢弃） */
+  profileNote?: string;
 }): string {
   const body = input.items.length
     ? input.items
@@ -118,7 +120,8 @@ export function recommendationUserPrompt(input: {
     ? `\n\n本次要求（用户当次填写，优先满足；只作用于本次）：${input.note.trim().slice(0, 120)}`
     : '';
   const bodyText = buildBodyText(input.body);
-  return `我的衣物档案：\n${body}\n\n今天的情境：${scene}${bodyText}${locked}${prefsText}${noteText}\n\n请按 system 要求的 JSON 结构给出 2-3 个候选组合。`;
+  const profileNoteText = input.profileNote ? `\n\n${input.profileNote}` : '';
+  return `我的衣物档案：\n${body}${profileNoteText}\n\n今天的情境：${scene}${bodyText}${locked}${prefsText}${noteText}\n\n请按 system 要求的 JSON 结构给出 2-3 个候选组合。`;
 }
 
 /** 身材资料行：仅在有有效数值时输出，明确"不下合身结论"的边界 */
