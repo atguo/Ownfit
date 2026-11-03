@@ -1,20 +1,24 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text } from 'react-native';
 import { Sheet } from '../../ui/components/Sheet';
 import { Field, ChipSelect, TextField } from '../../ui/components/Field';
-import { Notice } from '../../ui/components/Basics';
+import { Notice, Spinner } from '../../ui/components/Basics';
 import { Button } from '../../ui/components/Button';
 import { useToast } from '../../ui/components/Toast';
 import { DEMO_WEATHER, setContext, useDemoStore } from '../demoStore';
 import { saveSceneDefault } from '../../data/repositories/settingsRepository';
-import { fetchTodayWeather, pickCurrentTemp, type WeatherSnapshot } from '../../services/weather';
+import { fetchTodayWeather, fetchTodayWeatherByCoords, pickCurrentTemp, type WeatherSnapshot } from '../../services/weather';
+import { locateCity, type LocatedPlace } from '../../services/location';
 import { dayOptions, sceneOptions } from '../../data/demo';
 import { colors, type } from '../../ui/tokens';
 
 // 调整当天场景（天气文档 §4.1）：常用场景只是默认值，当次调整不自动覆盖长期默认——
 // 因此“用于这次搭配”只写当次；“保存为常用”才写默认值（用户明确选择）。
-// 天气（M5 轨 C）：可选联网查实时（open-meteo，只发城市名，不发送衣橱或人物资料）；
-// 失败或未查时保持手动可填；手动输入与服务数据来源可区分（tempSource：demo/real/manual）。
+// 天气（M5 轨 C）：可选联网查实时（open-meteo）；失败或未查时保持手动可填；
+// 手动输入与服务数据来源可区分（tempSource：demo/real/manual）。
+// 定位为主、手动为辅（M6 批次 1 补充，2026-11-03 项目用户确认）：打开即自动定位城市并按坐标查天气；
+// 定位不准或拒绝授权时手动修改/填写。坐标降到 4 位小数后只发给天气与城市名解析服务，
+// 不发送衣橱或人物资料；城市名解析失败降级"当前位置"占位，不伪造城市名。
 // 失效处理（M6 批次 1.3）：实时天气是"某城市某日"的数据——改城市/改日期即失效并清空重查；
 // 未提供新温度时，旧实时温度回退为示例占位（明确标注），不把旧天气冒充新地点/新日期的天气。
 
@@ -38,6 +42,40 @@ export function SceneSheet({ visible, onClose }: { visible: boolean; onClose: ()
   const [weatherFor, setWeatherFor] = useState<{ city: string; day: string } | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState<string | null>(null);
+  /** 定位结果：城市名 + 降精度坐标；用户手动改城市后按城市名查询，不再用坐标 */
+  const [located, setLocated] = useState<LocatedPlace | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [locateNote, setLocateNote] = useState<string | null>(null);
+
+  // 打开即自动定位（定位为主、手动为辅）：权限未决定时弹一次系统授权；
+  // 拒绝过则不再弹，仅提示可手动填写。每次打开都尝试——授权用户自动获得最新城市。
+  useEffect(() => {
+    if (!visible) return;
+    void runLocate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  async function runLocate() {
+    setLocating(true);
+    setLocateNote(null);
+    try {
+      const result = await locateCity(true);
+      if (result.ok) {
+        setLocated(result.place);
+        setCity(result.place.label);
+        invalidateWeather(result.place.label, day);
+        setLocateNote(
+          result.place.resolved
+            ? null
+            : '已按当前位置查天气；未能解析城市名，可手动修改地点',
+        );
+      } else {
+        setLocateNote(result.message);
+      }
+    } finally {
+      setLocating(false);
+    }
+  }
 
   /** 城市/日期变化使已查天气失效（数据只对查询时的城市与"今天"成立） */
   function invalidateWeather(nextCity: string, nextDay: string) {
@@ -64,7 +102,11 @@ export function SceneSheet({ visible, onClose }: { visible: boolean; onClose: ()
     setWeatherError(null);
     setWeather(null);
     try {
-      const result = await fetchTodayWeather(trimmed);
+      // 定位结果未被手动修改时按坐标直查（跳过城市名解析）；手动改过的城市按名称解析
+      const place = located && trimmed === located.label ? located : null;
+      const result = place
+        ? await fetchTodayWeatherByCoords(place.lat, place.lon)
+        : await fetchTodayWeather(trimmed);
       if (result.ok) {
         setWeather(result.snapshot);
         setWeatherFor({ city: trimmed, day });
@@ -135,6 +177,15 @@ export function SceneSheet({ visible, onClose }: { visible: boolean; onClose: ()
           }}
           placeholder="所在地点"
         />
+        <Button
+          variant="text"
+          label={locating ? '定位中…' : '使用当前位置'}
+          onPress={() => void runLocate()}
+          disabled={locating}
+          style={styles.locateButton}
+        />
+        {locating ? <Spinner /> : null}
+        {locateNote ? <Text style={styles.sourceNote}>{locateNote}</Text> : null}
       </Field>
       <Field label="日期">
         <ChipSelect
@@ -151,6 +202,9 @@ export function SceneSheet({ visible, onClose }: { visible: boolean; onClose: ()
       </Field>
 
       <Field label="天气（可选）">
+        <Notice>
+          定位仅用于确定天气城市：坐标只发给天气服务与城市名解析服务，不发衣橱或人物资料；拒绝定位可手动填写。
+        </Notice>
         <Button
           variant="secondary"
           label={weatherLoading ? '查询中…' : '查实时天气（需联网）'}
@@ -195,6 +249,10 @@ const styles = StyleSheet.create({
     color: colors.muted,
     lineHeight: 23,
     marginBottom: 15,
+  },
+  locateButton: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
   },
   tempInput: {
     marginTop: 8,

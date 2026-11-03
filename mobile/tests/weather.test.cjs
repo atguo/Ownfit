@@ -117,3 +117,23 @@ test('WMO 描述映射：未知码不崩溃，给“未知天气”', async () =
   assert.equal(result.snapshot.description, '未知天气');
   assert.equal(result.snapshot.weatherCode, 1234);
 });
+
+// M6 批次 1 补充：定位路径按坐标直查今日预报（跳过城市名解析）
+test('按坐标查今日预报：不经 geocoding，直连 forecast；缺数据如实返回', async () => {
+  const urls = [];
+  const api = loadWeatherModule(async (url) => {
+    urls.push(String(url));
+    return forecastHit();
+  });
+  const result = await api.fetchTodayWeatherByCoords(30.1235, 120.6543);
+  assert.equal(result.ok, true);
+  assert.equal(result.snapshot.tempRange, '12–19℃');
+  assert.equal(urls.length, 1, '坐标查询只调用 forecast 一次');
+  assert.match(urls[0], /latitude=30\.1235/);
+  assert.match(urls[0], /longitude=120\.6543/);
+
+  const noData = loadWeatherModule(async () => jsonResponse({ daily: {} })());
+  const empty = await noData.fetchTodayWeatherByCoords(30.1235, 120.6543);
+  assert.equal(empty.ok, false);
+  assert.equal(empty.kind, 'no_data');
+});

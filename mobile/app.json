@@ -36,6 +36,12 @@
       ],
       "expo-secure-store",
       [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "用于自动获取你所在城市并查询天气。可拒绝后手动填写城市；位置信息不用于天气以外的任何用途。"
+        }
+      ],
+      [
         "expo-sqlite",
         {
           "android": {

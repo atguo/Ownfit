@@ -100,24 +100,9 @@ export function pickCurrentTemp(input: {
   return null;
 }
 
-/** 城市名 → 今日天气（geocoding + forecast 两次调用；任一失败如实返回） */
-export async function fetchTodayWeather(city: string): Promise<WeatherResult> {
-  const geo = await geocodeCity(city);
-  if (!('lat' in geo)) return geo as WeatherResult;
-
-  const url =
-    `${FORECAST_URL}?latitude=${geo.lat}&longitude=${geo.lon}` +
-    '&daily=temperature_2m_max,temperature_2m_min,weather_code&forecast_days=1&timezone=auto';
-  const result = await fetchJson(url);
-  if (!result.ok) return { ok: false, kind: result.kind, message: result.message };
-
-  const payload = result.value as {
-    daily?: {
-      temperature_2m_max?: number[];
-      temperature_2m_min?: number[];
-      weather_code?: number[];
-    };
-  };
+function parseForecast(payload: {
+  daily?: { temperature_2m_max?: number[]; temperature_2m_min?: number[]; weather_code?: number[] };
+}): WeatherResult {
   const max = payload.daily?.temperature_2m_max?.[0];
   const min = payload.daily?.temperature_2m_min?.[0];
   const code = payload.daily?.weather_code?.[0];
@@ -135,4 +120,21 @@ export async function fetchTodayWeather(city: string): Promise<WeatherResult> {
       fetchedAt: new Date().toISOString(),
     },
   };
+}
+
+/** 坐标 → 今日预报（定位路径：跳过城市名解析；坐标已在定位层降精度） */
+export async function fetchTodayWeatherByCoords(lat: number, lon: number): Promise<WeatherResult> {
+  const url =
+    `${FORECAST_URL}?latitude=${lat}&longitude=${lon}` +
+    '&daily=temperature_2m_max,temperature_2m_min,weather_code&forecast_days=1&timezone=auto';
+  const result = await fetchJson(url);
+  if (!result.ok) return { ok: false, kind: result.kind, message: result.message };
+  return parseForecast(result.value as Parameters<typeof parseForecast>[0]);
+}
+
+/** 城市名 → 今日天气（geocoding + forecast 两次调用；任一失败如实返回） */
+export async function fetchTodayWeather(city: string): Promise<WeatherResult> {
+  const geo = await geocodeCity(city);
+  if (!('lat' in geo)) return geo as WeatherResult;
+  return fetchTodayWeatherByCoords(geo.lat, geo.lon);
 }
