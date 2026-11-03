@@ -3,6 +3,10 @@
 // 输入指纹（input_key）= 单品别名集 + 场景 + 配置与提示词版本；结果 result_json 存候选（真实单品 ID）。
 
 import { getDb } from '../db';
+import {
+  RECOMMENDATION_CONTRACT_VERSION,
+  RECOMMENDATION_PROMPT_VERSION,
+} from '../../services/ai/recommendationService';
 import { updateTaskStatus, type TaskStatusPatch } from './taskRepository';
 
 export const RECOMMENDATION_TASK_KIND = 'outfit_recommendation';
@@ -36,6 +40,8 @@ export interface RecommendationTask {
   requestKey: string;
   configId: string;
   configRevision: string;
+  /** 入队时的输入快照（当次场景 + 锁定单品别名；schema v5 起落库，旧任务为 null） */
+  inputJson: string | null;
   errorKind: string | null;
   errorSummary: string | null;
   candidates: RecommendationCandidate[] | null;
@@ -52,6 +58,7 @@ interface TaskRow {
   request_key: string;
   config_id: string;
   config_revision: string;
+  input_json: string | null;
   error_kind: string | null;
   error_summary: string | null;
   result_json: string | null;
@@ -84,6 +91,7 @@ function rowToTask(row: TaskRow): RecommendationTask {
     requestKey: row.request_key,
     configId: row.config_id,
     configRevision: row.config_revision,
+    inputJson: row.input_json ?? null,
     errorKind: row.error_kind,
     errorSummary: row.error_summary,
     candidates,
@@ -100,6 +108,8 @@ export interface CreateRecommendationTaskInput {
   configId: string;
   configSnapshot: string;
   configRevision: string;
+  /** 入队时输入快照（当次场景 + 锁定单品别名；执行时按此发送，不现读会话） */
+  inputJson: string;
 }
 
 export type CreateRecommendationResult =
@@ -129,8 +139,9 @@ export async function createRecommendationTask(
   await db.runAsync(
     `INSERT INTO tasks (
        id, kind, item_id, status, input_revision, attempt, photo_id, input_key, request_key,
-       config_id, config_snapshot, config_revision, contract_version, prompt_version, created_at, updated_at
-     ) VALUES (?, ?, 'outfit-recommendation', 'queued', 1, 1, 'none', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       config_id, config_snapshot, config_revision, contract_version, prompt_version,
+       input_json, created_at, updated_at
+     ) VALUES (?, ?, 'outfit-recommendation', 'queued', 1, 1, 'none', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     RECOMMENDATION_TASK_KIND,
     input.inputKey,
@@ -138,8 +149,9 @@ export async function createRecommendationTask(
     input.configId,
     input.configSnapshot,
     input.configRevision,
-    'outfit-recommendation-1',
-    '1',
+    RECOMMENDATION_CONTRACT_VERSION,
+    RECOMMENDATION_PROMPT_VERSION,
+    input.inputJson,
     now,
     now,
   );

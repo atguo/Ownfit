@@ -10,6 +10,7 @@ import { useToast } from '../../ui/components/Toast';
 import {
   addConfig,
   deleteConfig,
+  ensureConfigCache,
   getConfig,
   updateConfig,
   updateTestResult,
@@ -53,15 +54,18 @@ export default function AiConfigEditScreen() {
   const [saving, setSaving] = useState(false);
   const [test, setTest] = useState<TestState>({ phase: 'idle' });
 
-  // 编辑已保存的配置时回填（getConfig 是同步读文件，挂载时执行一次即可）
+  // 编辑已保存的配置时回填；镜像未就绪时先加载再回填（M6 批次 1.4：配置已迁本地库）
   useEffect(() => {
-    if (existing && !name && !baseUrl) {
-      setName(existing.name);
-      setUrlKind(existing.urlKind);
-      setBaseUrl(existing.baseUrl);
-      setModelId(existing.modelId);
-      setCapabilities(existing.capabilities);
-    }
+    void ensureConfigCache().then(() => {
+      const loaded = id ? getConfig(id) : undefined;
+      if (loaded && !name && !baseUrl) {
+        setName(loaded.name);
+        setUrlKind(loaded.urlKind);
+        setBaseUrl(loaded.baseUrl);
+        setModelId(loaded.modelId);
+        setCapabilities(loaded.capabilities);
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

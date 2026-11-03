@@ -6,7 +6,7 @@ import { BackTitle } from '../../ui/PageTop';
 import { Button } from '../../ui/components/Button';
 import { Notice } from '../../ui/components/Basics';
 import { useToast } from '../../ui/components/Toast';
-import { loadConfigs } from '../../services/ai/configStore';
+import { ensureConfigCache, loadConfigs } from '../../services/ai/configStore';
 import { capabilityLabels, urlKindLabels, type ModelConfig } from '../../services/ai/types';
 import {
   getRememberedVisionConfigId,
@@ -31,7 +31,8 @@ export default function AiConfigListScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      setConfigs(loadConfigs());
+      // 页面可能早于启动镜像加载完成进入（M6 批次 1.4）：先确保镜像，再读列表
+      void ensureConfigCache().then(() => setConfigs(loadConfigs()));
       void getRememberedVisionConfigId().then(setDefaultConfigId);
       setLoaded(true);
     }, []),

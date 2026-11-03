@@ -903,14 +903,18 @@ test('会话辅助：requestKey 与批次记录（P6/P7 复用）', async () => 
 test('执行器单例与默认模型记录（P6 录入页与配置页共用）', async () => {
   const ctx = await setupRunner();
   try {
-    const analysisStore = createLoader(ctx.adapter)(path.join(SRC, 'features/garmentAnalysisStore.ts'));
+    // 同一 loader 实例：configStore 的内存镜像必须与 analysisStore 共享（模块级缓存按 loader 隔离）
+    const load = createLoader(ctx.adapter);
+    const analysisStore = load(path.join(SRC, 'features/garmentAnalysisStore.ts'));
 
     const first = analysisStore.initGarmentTaskRunner();
     const second = analysisStore.initGarmentTaskRunner();
     assert.equal(first, second, '重复初始化必须返回同一执行器单例');
     assert.equal(analysisStore.getGarmentTaskRunner(), first);
 
-    // 未配置视觉模型时解析结果为 missing（配置读自注入的空文件系统）
+    // 未配置视觉模型时解析结果为 missing（M6 批次 1.4 起配置读自本地库镜像，先加载缓存）
+    const configStore = load(path.join(SRC, 'services/ai/configStore.ts'));
+    await configStore.ensureConfigCache();
     assert.equal((await analysisStore.resolveVisionForAnalysis()).status, 'missing');
 
     assert.equal(await analysisStore.getRememberedVisionConfigId(), null);

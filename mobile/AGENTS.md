@@ -1,14 +1,14 @@
 本目录属于“衣见”（Ownfit）项目。协作约束、架构边界与同步义务以仓库根目录 [AGENTS.md](../AGENTS.md) 为准；实施顺序与验收见 [docs/开发计划.md](../docs/开发计划.md)。
 
-## 当前结构（2026-11-03 核对）
+## 当前结构（2026-11-03 核对，M6 批次 1 后更新）
 
-M0–M4 已完成，M5 集成收尾/待整体验收，M6 未开始。衣物分析与预览已有真机全链路记录；推荐与天气已实现但仍有集成差异和验收缺口，详见 [M5 实施计划](../docs/plans/2026-10-30-M5-真实推荐与AI预览闭环-实施计划.md)。下文带日期记录保留历史语境，不以历史“0 次调用/待验收”覆盖后续证据。
+M0–M5 完成（M5 视同验收）；M6 进行中，批次 1（M5 登记缺口收尾）已实现，真机走查待项目用户执行，详见 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md)。下文带日期记录保留历史语境，不以历史“0 次调用/待验收”覆盖后续证据。
 
 - `src/app/`：根 Stack + `(tabs)/` 四主入口 + `choose`、`outfit`、`add` + `ai/config`、`ai/config-edit` + `dev/components`、`dev/data-tools`。预览为 `PreviewSheet` 弹层，当前没有独立 `preview.tsx` 路由。
 - `src/ui/`：设计令牌、图标、响应式页面容器与原生组件，真实搭配板为 `RealOutfitBoard`。
-- `src/data/`：SQLCipher schema v4、密钥管理与 user_version 迁移；repositories 包含衣物/照片/属性/方案/分析任务/预览/推荐/维护/设置/颜色库。照片、人物参考和生成图保存在应用私有目录。
-- `src/services/`：AI 配置、协议客户端及分析/预览/推荐执行器；`weather.ts` 提供可选城市天气查询。非敏感 AI 配置仍使用私有 JSON。
-- `src/features/`：`outfitSession` 编辑会话，分析/预览/推荐 store，`sheets/` 原生弹层。`demoStore` 仍承载当次场景等内存上下文，不能笼统称与真实流程零交集；真实资料以 repository 为准，推荐尚未接入该当次场景。
+- `src/data/`：SQLCipher schema v6、密钥管理与 user_version 迁移；repositories 包含衣物/照片/属性/方案/分析任务/预览/推荐/维护/设置/颜色库。照片、人物参考和生成图保存在应用私有目录。
+- `src/services/`：AI 配置、协议客户端及分析/预览/推荐执行器；`weather.ts` 提供可选城市天气查询。非敏感 AI 配置存本地库 `ai_configs` 表（v6，DB 为源 + 内存镜像），API Key 仍只在设备安全存储。
+- `src/features/`：`outfitSession` 编辑会话（含会话来源 origin：manual/ai），分析/预览/推荐 store，`sheets/` 原生弹层。`demoStore` 承载当次场景等内存上下文；推荐已消费该当次场景（含温度来源区分，演示温度不进 AI）。
 
 ## 命令
 
@@ -62,3 +62,14 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 - schema v4：活动任务唯一索引改 (kind, item_id, input_key)（原来只按 item_id 会跨类型互相阻塞）。
 - preferences 共享表纪律：偏好项 id 必须 `pref-` 前缀（settingsRepository 读取/保存按前缀过滤）；其他用途（color-library、preview-reference）避开该前缀。
 - 轨 B1/B2：数据工具页导出档案 JSON；`packages/experiments/src/outfit-recommendation/`（提示词/schema/跑批）。回归：`node --test mobile/tests/*.test.cjs`（73 项）。
+
+### M6 批次 1：M5 登记缺口收尾（2026-11-03 实现完成，待真机走查）
+
+依据 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md) 批次 1 落地四项：
+
+- **1.1 契约标识统一**：`packages/contract` 内部常量与 package.json 去 draft 统一 1.0.0；公共入口改为从 `schema.ts` 转出唯一定义。
+- **1.2 推荐当次输入与采用保存语义**：`loadSceneSnapshot` 改读首页当次 context（演示温度 tempSource='demo' 不进 AI；实时/手动温度带来源）；入队持久化输入快照（schema v5 增 `tasks.input_json`：当次场景 + 锁定单品别名），执行器按快照发送、不现读会话；提示词升 v2（锁定单品必须包含、温度标注来源）；`outfitSession` 增会话来源 origin，采用候选带 `source='ai'` + 理由，`planRepository` 按 Plan.source 落库（不再固定 manual）。
+- **1.3 天气地点/日期失效**：SceneSheet 改城市/日期即清空已查天气；选「明天」时今日预报不适用（如实提示手动填写，不冒充明天天气）；地点/日期变化且无新温度时旧实时温度回退示例占位（明确标注），不静默沿用；`pickCurrentTemp` 纯函数化；获取时间存入 context 并本地时区展示（不再 UTC 截取）。
+- **1.4 AI 非敏感配置迁数据库**：schema v6 新增 `ai_configs` 表；`configStore` 改为"DB 为源 + 内存镜像"，同步 getter 签名不变（任务执行器/路由层零改动）；启动时 `_layout` 先 `ensureConfigCache` 再启动分析执行器（避免镜像未就绪误判配置失效）；首次初始化表空且旧 JSON 可解析则搬入并删除旧文件（表非空后不再读旧文件，损坏文件保留不删按无配置处理）；API Key 仍只在 SecureStore；`callRevision` 语义不变；安全模式重试后重新加载镜像。
+- 回归：`recommendationInputs.test.cjs`（6 项）与 `configMigration.test.cjs`（6 项）新增；既有用例随 v5/v6 与配置语义更新（迁移断言至 v6、路由测试补 ensureConfigCache、损坏旧文件按 missing）。`pnpm typecheck`、契约样例（7+15 组）通过。
+- **未验证边界**：真机走查待项目用户执行（旧 JSON 迁移、推荐带当次场景/锁定、天气失效表达、采用保存来源显示）。

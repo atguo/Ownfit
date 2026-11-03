@@ -21,7 +21,7 @@ import {
   resolveTextForRecommendation,
   subscribeRecommendationChanges,
 } from '../recommendationStore';
-import { loadOutfitFrom, slotForCategory } from '../outfitSession';
+import { getOutfitSession, loadOutfitFrom, slotForCategory } from '../outfitSession';
 import type { WearStyle } from '@ownfit/contract';
 import { getItem } from '../../data/repositories/itemRepository';
 import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
@@ -62,7 +62,13 @@ export function RecommendationSheet({
   const [resolution, setResolution] = useState<ConfigResolution | null>(null);
   const [task, setTask] = useState<RecommendationTask | null>(null);
   const [active, setActive] = useState(false);
-  const [scene, setScene] = useState<{ city: string; day: string; scene: string } | null>(null);
+  const [scene, setScene] = useState<{
+    city: string;
+    day: string;
+    scene: string;
+    temp?: string;
+    tempSource?: string;
+  } | null>(null);
   const [starting, setStarting] = useState(false);
 
   const reload = useCallback(async () => {
@@ -92,7 +98,10 @@ export function RecommendationSheet({
     setStarting(true);
     void (async () => {
       try {
-        const result = await enqueueRecommendation({ scene, configId });
+        // 当前搭配会话有锁定单品时带入推荐（模型围绕锁定项组合；入队快照持久化）
+        const session = getOutfitSession();
+        const lockedItemIds = session.active && session.locks.length > 0 ? session.locks : undefined;
+        const result = await enqueueRecommendation({ scene, configId, lockedItemIds });
         toast(result.status === 'created' ? 'AI 正在为你搭配…' : '同样的推荐已在进行中');
         await reload();
       } finally {
@@ -163,6 +172,8 @@ export function RecommendationSheet({
       slots,
       wear: candidate.wearStyle as WearStyle,
       itemIds: candidate.slots.map((slot) => slot.itemId),
+      // 保存时保留 AI 来源与理由（M6 批次 1.2：不再固定 manual/null）
+      origin: { source: 'ai', reason: candidate.reason ?? null },
     });
     onClose();
     router.push('/outfit');
@@ -260,7 +271,11 @@ export function RecommendationSheet({
         disabled={starting || active || resolution?.status === 'choose'}
       />
       {active ? <Spinner /> : null}
-      {scene ? <Text style={styles.note}>{`场景：${scene.city} · ${scene.day} · ${scene.scene}`}</Text> : null}
+      {scene ? (
+        <Text style={styles.note}>
+          {`场景：${scene.city} · ${scene.day} · ${scene.scene}${scene.temp ? ` · ${scene.temp}` : ' · 未查天气'}`}
+        </Text>
+      ) : null}
 
       <Text style={styles.sectionTitle}>最近推荐</Text>
       {!task ? (

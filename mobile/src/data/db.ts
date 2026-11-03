@@ -192,6 +192,49 @@ async function migrateToV4(db: SQLite.SQLiteDatabase): Promise<void> {
 }
 
 /**
+ * schema v5（M6 批次 1.2）：tasks 增加通用输入快照列 input_json。
+ * 原因：推荐任务的当次场景（含温度来源）与锁定单品集在入队时采集，
+ * 执行时（可能跨页面、跨重启）必须用入队时的快照，不能现读会话状态
+ * （否则场景改动或会话结束会让实际发送内容与输入指纹/用户所见不一致）。
+ * 通用可空列，衣物分析（输入=照片）与预览任务不使用。
+ */
+async function migrateToV5(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await db.execAsync('ALTER TABLE tasks ADD COLUMN input_json TEXT');
+    await db.execAsync('PRAGMA user_version = 5');
+  });
+}
+
+/**
+ * schema v6（M6 批次 1.4）：AI 非敏感配置从应用私有 JSON 迁入本地库。
+ * API Key 仍只在设备安全存储（key_ref 引用），不入库；
+ * 迁移数据由 configStore 在缓存初始化时从旧 JSON 文件搬入（表空才迁，幂等）。
+ */
+async function migrateToV6(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS ai_configs (
+          id TEXT PRIMARY KEY NOT NULL,
+          name TEXT NOT NULL,
+          url_kind TEXT NOT NULL,
+          base_url TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          capabilities TEXT NOT NULL,
+          key_ref TEXT NOT NULL,
+          has_key INTEGER NOT NULL DEFAULT 0,
+          test_status TEXT NOT NULL DEFAULT 'untested',
+          test_message TEXT,
+          tested_at TEXT,
+          call_revision TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    await db.execAsync('PRAGMA user_version = 6');
+  });
+}
+
+/**
  * 各版本迁移步骤（顺序执行，每步把库推进到对应 user_version）。
  * 导出用于测试：测试必须调用这里的生产迁移步骤构造 v1/v2 库，
  * 不能在测试里另复制一套建表 SQL（分批执行手册 P2）。
@@ -204,6 +247,8 @@ export const schemaMigrations: ReadonlyArray<{
   { version: 2, up: migrateToV2 },
   { version: 3, up: migrateToV3 },
   { version: 4, up: migrateToV4 },
+  { version: 5, up: migrateToV5 },
+  { version: 6, up: migrateToV6 },
 ];
 
 /**

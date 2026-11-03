@@ -12,7 +12,7 @@
 
 import { z, type ZodType } from 'zod';
 
-export const CONTRACT_VERSION = '1.0.0-draft';
+export const CONTRACT_VERSION = '1.0.0';
 
 /** 穿法的作用部位。当前仅支持整体；未来扩展（如袖口、下摆）在此追加。 */
 export const wearSlots = ['整体'] as const;

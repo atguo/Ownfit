@@ -80,6 +80,26 @@ export async function geocodeCity(city: string): Promise<{ ok: true; lat: number
   return { ok: true, lat: hit.latitude, lon: hit.longitude, label };
 }
 
+/**
+ * 当次场景的温度决策（纯函数，M6 批次 1.3）：实时天气只适用于"今天"——
+ * 预报仅返回今日，选择「明天」时今日预报不适用，回退手动输入；两者皆无返回 null
+ * （保持现状不覆盖）。来源随结果返回，手动与实时可区分（天气文档 §4）。
+ */
+export function pickCurrentTemp(input: {
+  day: string;
+  manualTemp: string;
+  weather: { tempRange: string; description: string } | null;
+}): { temp: string; weatherDesc: string; source: 'real' | 'manual' } | null {
+  if (input.weather && input.day === '今天') {
+    return { temp: input.weather.tempRange, weatherDesc: input.weather.description, source: 'real' };
+  }
+  const manual = input.manualTemp.trim();
+  if (manual) {
+    return { temp: manual, weatherDesc: '手动填写', source: 'manual' };
+  }
+  return null;
+}
+
 /** 城市名 → 今日天气（geocoding + forecast 两次调用；任一失败如实返回） */
 export async function fetchTodayWeather(city: string): Promise<WeatherResult> {
   const geo = await geocodeCity(city);

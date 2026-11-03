@@ -144,13 +144,18 @@ const taskInput = (overrides = {}) => ({
 // 测试（仅在本文件被直接运行时注册；被其他测试 require 时不注册）
 // ---------------------------------------------------------------------------
 if (require.main === module) {
-  test('空库迁移到 v4：建 tasks 与 ai_task_preferences，items/attributes 增列', async () => {
+  test('空库迁移到最新（v6）：建 tasks 与 ai_task_preferences、tasks.input_json 与 ai_configs，items/attributes 增列', async () => {
     const { db, adapter, close } = createMemoryAdapter();
     try {
       const { runMigrations } = loadDbModule();
       await runMigrations(adapter);
 
-      assert.equal(userVersion(db), 4);
+      assert.equal(userVersion(db), 6);
+      assert.equal(tableExists(db, 'tasks'), true);
+      assert.equal(tableExists(db, 'ai_task_preferences'), true);
+      assert.ok(columnNames(db, 'items').includes('revision'));
+      assert.ok(columnNames(db, 'tasks').includes('input_json'), 'tasks 应包含 input_json（v5）');
+      assert.equal(tableExists(db, 'ai_configs'), true);
       assert.equal(tableExists(db, 'tasks'), true);
       assert.equal(tableExists(db, 'ai_task_preferences'), true);
       assert.ok(columnNames(db, 'items').includes('revision'));
@@ -163,7 +168,7 @@ if (require.main === module) {
     }
   });
 
-  test('v1 升级到 v4：旧资料保留，NULL value 回填 unknown，item_version/revision 保持', async () => {
+  test('v1 升级到最新：旧资料保留，NULL value 回填 unknown，item_version/revision 保持', async () => {
     const { db, adapter, close } = createMemoryAdapter();
     try {
       const { runMigrations, schemaMigrations } = loadDbModule();
@@ -190,7 +195,7 @@ if (require.main === module) {
 
       await runMigrations(adapter);
 
-      assert.equal(userVersion(db), 4);
+      assert.equal(userVersion(db), 6);
       const item = db.prepare('SELECT * FROM items WHERE id = ?').get('i1');
       assert.equal(item.name, '旧衬衫');
       assert.equal(item.category, '上衣');
@@ -205,7 +210,7 @@ if (require.main === module) {
     }
   });
 
-  test('v2 升级到 v4：方案/穿着/照片/属性全部保留', async () => {
+  test('v2 升级到最新：方案/穿着/照片/属性全部保留', async () => {
     const { db, adapter, close } = createMemoryAdapter();
     try {
       const { runMigrations, schemaMigrations } = loadDbModule();
@@ -227,7 +232,7 @@ if (require.main === module) {
 
       await runMigrations(adapter);
 
-      assert.equal(userVersion(db), 4);
+      assert.equal(userVersion(db), 6);
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM plans').get().n, 1);
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM plan_items').get().n, 1);
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM worn_records').get().n, 1);
@@ -247,7 +252,7 @@ if (require.main === module) {
 
       await runMigrations(adapter);
 
-      assert.equal(userVersion(db), 4);
+      assert.equal(userVersion(db), 6);
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 1);
     } finally {
       close();
@@ -301,7 +306,7 @@ if (require.main === module) {
       // 解除注入后重试应成功（不清库）
       adapter.setFailOn(null);
       await runMigrations(adapter);
-      assert.equal(userVersion(db), 4);
+      assert.equal(userVersion(db), 6);
       assert.equal(tableExists(db, 'tasks'), true);
     } finally {
       close();

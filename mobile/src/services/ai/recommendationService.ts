@@ -3,7 +3,7 @@
 // 红线：只用档案内单品（校验引用）；数据不足显式 gaps，不用不存在的单品凑数；
 // 不输出合身/保暖等结论。
 
-export const RECOMMENDATION_PROMPT_VERSION = '1';
+export const RECOMMENDATION_PROMPT_VERSION = '2';
 export const RECOMMENDATION_CONTRACT_VERSION = 'outfit-recommendation-1';
 
 export interface ProfileItem {
@@ -54,14 +54,20 @@ export function recommendationSystemPrompt(): string {
     '   role 只能取：top、bottom、dress、shoes、outerwear、bag、accessory（单数，不要用 bottoms）。',
     '3. 数据不足时不要凑数：把缺的槽位写进 gaps（例如"没有鞋履可搭"），不要用不存在的单品填补。',
     '4. wearStyle 只能是：自然垂放、前侧塞衣角、外层敞开穿。',
-    '5. reason 用一句话说明搭配思路（风格/场合/颜色协调），不要下合身、保暖、显瘦等结论——',
+    '5. 用户给出"已锁定单品"时，每个候选都必须包含这些单品。',
+    '6. reason 用一句话说明搭配思路（风格/场合/颜色协调），不要下合身、保暖、显瘦等结论——',
     '   单凭照片与档案无法判断这些。',
-    '6. 输出紧凑 JSON，不要解释文字、不要代码围栏。结构：',
+    '7. 输出紧凑 JSON，不要解释文字、不要代码围栏。结构：',
     '{"candidates":[{"slots":[{"role":"top","itemId":"item-xxx","note":"可选说明"}],"wearStyle":"自然垂放","reason":"可选一句话"}],"gaps":["缺口说明"],"summary":"可选总述"}',
   ].join('\n');
 }
 
-export function recommendationUserPrompt(input: { items: ProfileItem[]; scene: { city: string; day: string; scene: string; temp?: string } }): string {
+export function recommendationUserPrompt(input: {
+  items: ProfileItem[];
+  scene: { city: string; day: string; scene: string; temp?: string; tempSource?: string };
+  /** 用户当前搭配中已锁定的单品（别名 id）；非空时组合必须包含 */
+  lockedAliases?: string[];
+}): string {
   const body = input.items.length
     ? input.items
         .map((item) => {
@@ -83,11 +89,16 @@ export function recommendationUserPrompt(input: { items: ProfileItem[]; scene: {
     `城市=${input.scene.city}`,
     `日期=${input.scene.day}`,
     `场合=${input.scene.scene}`,
-    input.scene.temp ? `温度=${input.scene.temp}` : '',
+    input.scene.temp
+      ? `温度=${input.scene.temp}（${input.scene.tempSource === 'manual' ? '手动填写' : '实时天气'}）`
+      : '',
   ]
     .filter(Boolean)
     .join('，');
-  return `我的衣物档案：\n${body}\n\n今天的情境：${scene}\n\n请按 system 要求的 JSON 结构给出 2-3 个候选组合。`;
+  const locked = input.lockedAliases?.length
+    ? `\n\n用户当前搭配中已锁定的单品（候选组合必须包含）：${input.lockedAliases.join('、')}`
+    : '';
+  return `我的衣物档案：\n${body}\n\n今天的情境：${scene}${locked}\n\n请按 system 要求的 JSON 结构给出 2-3 个候选组合。`;
 }
 
 /** 从模型返回内容解析推荐结果：整体 JSON / 剥 think / 单个围栏（与衣物分析同一套严格规则） */
@@ -175,16 +186,19 @@ export function normalizeRecommendation(
   return { ok: true, value: { candidates, gaps, ...(summary ? { summary } : null) } };
 }
 
-/** 输入指纹：单品集（别名排序）+ 场景 + 配置与提示词版本 */
+/** 输入指纹：单品集（别名排序）+ 场景（含温度来源）+ 锁定集 + 配置与提示词版本 */
 export function buildRecommendationInputKey(input: {
   aliasItemIds: string[];
-  scene: { city: string; day: string; scene: string; temp?: string };
+  scene: { city: string; day: string; scene: string; temp?: string; tempSource?: string };
+  /** 锁定单品别名（排序后参与指纹，内容变化视为新输入） */
+  lockedAliases?: string[];
   configId: string;
   configRevision: string;
 }): string {
   return JSON.stringify({
     itemIds: [...input.aliasItemIds].sort(),
     scene: input.scene,
+    lockedAliases: [...(input.lockedAliases ?? [])].sort(),
     configId: input.configId,
     configRevision: input.configRevision,
     contractVersion: RECOMMENDATION_CONTRACT_VERSION,

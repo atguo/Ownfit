@@ -16,6 +16,8 @@ export interface DemoContext {
   weatherDesc: string;
   /** 温度来源：演示 / 实时 / 手动，三者可区分（天气文档 §4：手动与服务数据可区分） */
   tempSource: 'demo' | 'real' | 'manual';
+  /** 实时天气的获取时间（ISO，本地展示）；仅 tempSource='real' 时有值（M6 批次 1.3） */
+  weatherFetchedAt?: string;
 }
 
 export interface DemoState {
@@ -25,8 +27,11 @@ export interface DemoState {
   prefs: string[];
 }
 
+/** 示例天气占位（首页始终显示温度；未查实时/未手动填写时的明确标注占位） */
+export const DEMO_WEATHER = { temp: '18–24℃', weatherDesc: '晴间多云（演示）' } as const;
+
 const initial: DemoState = {
-  context: { city: '杭州', day: '今天', scene: '日常通勤', temp: '18–24℃', weatherDesc: '晴间多云（演示）', tempSource: 'demo' },
+  context: { city: '杭州', day: '今天', scene: '日常通勤', ...DEMO_WEATHER, tempSource: 'demo' },
   newUser: false,
   reference: false,
   prefs: [],

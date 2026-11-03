@@ -1,6 +1,8 @@
 // M3 搭配会话：选基础单品 → 组合（槽位）→ 锁定/替换/穿法/撤销 → 保存为方案。
-// 组合为手动构建（无 AI 推荐，不宣称智能）；缺口按品类显式表达（衣橱文档 §3.1.1：
-// "已录入衣橱中暂未找到"，不推断用户未拥有）。撤销栈为会话内存态；保存走契约校验 + planRepository。
+// 会话来源两种：手动构建（choose 页起步）与 AI 推荐采用（M5 轨 B4，RecommendationSheet）；
+// 来源与 AI 理由随会话保存进契约 Plan（source/reason），不冒充手动。缺口按品类显式表达
+// （衣橱文档 §3.1.1："已录入衣橱中暂未找到"，不推断用户未拥有）。
+// 撤销栈为会话内存态；保存走契约校验 + planRepository。
 
 import { useSyncExternalStore } from 'react';
 import type { SceneSnapshot, WearStyle } from '@ownfit/contract';
@@ -55,6 +57,10 @@ export interface OutfitSessionState {
   parentPlanId: string | null;
   parentLabel: string | null;
   parentItemIds: string[];
+  /** 会话来源：手动构建='manual'；AI 推荐采用='ai'（契约 Plan.source 同值） */
+  source: 'manual' | 'ai';
+  /** AI 推荐理由（source='ai' 时来自候选 reason；无则 null，不编造） */
+  reason: string | null;
 }
 
 interface SessionState extends OutfitSessionState {
@@ -70,6 +76,8 @@ let state: SessionState = {
   parentPlanId: null,
   parentLabel: null,
   parentItemIds: [],
+  source: 'manual',
+  reason: null,
   history: [],
 };
 
@@ -204,12 +212,17 @@ export async function startOutfitFrom(basisId: string): Promise<boolean> {
     parentPlanId: null,
     parentLabel: null,
     parentItemIds: [],
+    source: 'manual',
+    reason: null,
     history: [],
   });
   return true;
 }
 
-/** 复用已保存方案：载入为当前会话并记录父版本（修改后保存将关联 parent） */
+/**
+ * 载入既有内容为当前会话：复用已保存方案（记录父版本）或 AI 推荐采用
+ * （origin.source='ai' 并携带理由；修改后保存保留来源，不冒充手动）。
+ */
 export function loadOutfitFrom(input: {
   planId: string;
   name: string | null;
@@ -217,6 +230,7 @@ export function loadOutfitFrom(input: {
   slots: Partial<Record<OutfitSlot, string>>;
   wear: WearStyle;
   itemIds: string[];
+  origin?: { source: 'manual' | 'ai'; reason: string | null };
 }) {
   state.history = [];
   set({
@@ -228,6 +242,8 @@ export function loadOutfitFrom(input: {
     parentPlanId: input.planId,
     parentLabel: input.name,
     parentItemIds: [...input.itemIds],
+    source: input.origin?.source ?? 'manual',
+    reason: input.origin?.reason ?? null,
   });
 }
 
@@ -246,10 +262,10 @@ export function buildContractPlan(planId: string, scene: SceneSnapshot): import(
     version: 1,
     items,
     wear: { slot: '整体', style: state.wear },
-    reason: null,
+    reason: state.reason,
     gaps: missing.map((slot) => ({ kind: 'missing_category' as const, message: slotGapMessage(slot) })),
     scene: { ...scene },
-    source: 'manual',
+    source: state.source,
     createdAt: new Date().toISOString(),
   };
 }

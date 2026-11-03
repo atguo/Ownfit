@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ToastProvider } from '../ui/components/Toast';
 import { Button } from '../ui/components/Button';
 import { initGarmentTaskRunner } from '../features/garmentAnalysisStore';
+import { ensureConfigCache } from '../services/ai/configStore';
 import { getLastDbInitFailure, getDb, type DbInitFailure } from '../data/db';
 import { colors, radius, type } from '../ui/tokens';
 
@@ -29,6 +30,8 @@ export default function RootLayout() {
   const probeDb = useCallback(async () => {
     try {
       await getDb();
+      // 数据库可用后（重）加载 AI 配置镜像；失败不阻塞安全模式恢复
+      await ensureConfigCache().catch(() => undefined);
       setDbFailure(null);
     } catch {
       setDbFailure(getLastDbInitFailure() ?? { stage: 'open', message: '初始化失败' });
@@ -42,6 +45,10 @@ export default function RootLayout() {
 
     (async () => {
       try {
+        // 先加载 AI 配置镜像（M6 批次 1.4）：领取任务时要按配置判断可用性，
+        // 镜像未就绪就去领取会把 queued 任务误判为"配置已变化"
+        const configsReady = await ensureConfigCache();
+        if (!configsReady) throw new Error('AI 配置未能从本地库加载');
         // 启动时把遗留的 running 任务标为中断（不重发），然后在前台开始领取 queued
         await runner.recover();
         if (mounted) runner.setForeground(AppState.currentState === 'active');

@@ -40,8 +40,8 @@ export interface RecommendationRunnerDeps {
   getApiKey(keyRef: string): Promise<string | null>;
   /** 读取当前衣物档案（已入库单品，别名 → 真实 id 映射一并返回） */
   loadProfile(): Promise<{ items: ProfileItem[]; idByAlias: Map<string, string> }>;
-  /** 当次场景快照 */
-  loadScene(): Promise<{ city: string; day: string; scene: string; temp?: string }>;
+  /** 当次场景快照（仅旧任务无入队快照时兜底使用） */
+  loadScene(): Promise<{ city: string; day: string; scene: string; temp?: string; tempSource?: string }>;
   /** 候选落库（succeeded 提交） */
   commitResult(
     taskId: string,
@@ -61,6 +61,24 @@ export interface RecommendationRunner {
 const EXECUTE_WATCHDOG_MS = 90000;
 const CHAT_TIMEOUT_MS = 60000;
 const UNKNOWN_OUTCOME_KINDS: readonly string[] = ['timeout', 'network', 'cancelled'];
+
+/** 入队时持久化的输入快照（schema v5 起）；损坏视为无快照，回退现读场景 */
+interface StoredRecommendationInput {
+  scene?: { city: string; day: string; scene: string; temp?: string; tempSource?: string };
+  lockedAliases?: string[];
+}
+
+function parseStoredInput(inputJson: string | null): StoredRecommendationInput | null {
+  if (!inputJson) return null;
+  try {
+    const parsed = JSON.parse(inputJson) as StoredRecommendationInput;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (parsed.scene && typeof parsed.scene.city !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): RecommendationRunner {
   let started = false;
@@ -112,7 +130,12 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
       });
       return;
     }
-    const scene = await deps.loadScene();
+    // 场景与锁定集用入队时的快照（不现读会话状态）；旧任务无快照时回退现读
+    const stored = parseStoredInput(task.inputJson);
+    const scene = stored?.scene ?? (await deps.loadScene());
+    const lockedAliases = (stored?.lockedAliases ?? []).filter((id) =>
+      items.some((item) => item.id === id),
+    );
 
     const controller = new AbortController();
     markSent();
@@ -123,7 +146,7 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
         apiKey,
         [
           { role: 'system', content: recommendationSystemPrompt() },
-          { role: 'user', content: recommendationUserPrompt({ items, scene }) },
+          { role: 'user', content: recommendationUserPrompt({ items, scene, lockedAliases }) },
         ],
         CHAT_TIMEOUT_MS,
         { maxTokens: 2048, signal: controller.signal },

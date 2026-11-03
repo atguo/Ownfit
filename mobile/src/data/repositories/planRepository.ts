@@ -34,6 +34,8 @@ export interface PlanInput {
   wear: Wear;
   reason?: string | null;
   scene: SceneSnapshot;
+  /** 方案来源（契约 Plan.source）；缺省 'manual' */
+  source?: 'manual' | 'ai';
 }
 
 function newId(): string {
@@ -50,6 +52,7 @@ export function planInputFromContract(plan: Plan): PlanInput {
     wear: plan.wear,
     reason: plan.reason,
     scene: plan.scene,
+    source: plan.source,
   };
 }
 
@@ -67,13 +70,13 @@ export async function savePlan(input: PlanInput, name: string | null): Promise<S
     await db.runAsync(
       `INSERT INTO plans (id, parent_id, version, name, basis_item_id, wear_slot, wear_style, reason,
          scene_city, scene_day, scene_name, source, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          parent_id = excluded.parent_id, version = excluded.version, name = excluded.name,
          basis_item_id = excluded.basis_item_id, wear_slot = excluded.wear_slot,
          wear_style = excluded.wear_style, reason = excluded.reason,
          scene_city = excluded.scene_city, scene_day = excluded.scene_day,
-         scene_name = excluded.scene_name, updated_at = excluded.updated_at`,
+         scene_name = excluded.scene_name, source = excluded.source, updated_at = excluded.updated_at`,
       id,
       input.parentId ?? null,
       1,
@@ -85,6 +88,7 @@ export async function savePlan(input: PlanInput, name: string | null): Promise<S
       input.scene.city,
       input.scene.day,
       input.scene.scene,
+      input.source ?? 'manual',
       now,
       now,
     );
@@ -231,6 +235,7 @@ export async function saveContractPlan(plan: Plan, name: string | null): Promise
       wear: plan.wear,
       reason: plan.reason,
       scene: plan.scene,
+      source: plan.source,
     },
     name,
   );

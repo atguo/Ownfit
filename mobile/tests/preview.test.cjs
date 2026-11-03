@@ -222,7 +222,15 @@ test('删除：预览任务删除后记录与生成图一并清除；推荐记�
 
     // 推荐：创建 → 提交候选 → 删除 → 行消失（推荐结果无文件）
     const rec = await ctx.recommendation.createRecommendationTask(
-      baseCreateInput({ requestKey: 'rec-del-1', inputKey: JSON.stringify({ itemIds: ['item-a', 'item-b'], wearStyle: '自然垂放' }) }),
+      baseCreateInput({
+        requestKey: 'rec-del-1',
+        inputKey: JSON.stringify({ itemIds: ['item-a', 'item-b'], wearStyle: '自然垂放' }),
+        // M6 批次 1.2 起：推荐任务入队必须携带输入快照（当次场景 + 锁定别名）
+        inputJson: JSON.stringify({
+          scene: { city: '杭州', day: '今天', scene: '通勤' },
+          lockedAliases: [],
+        }),
+      }),
     );
     await ctx.recommendation.updateRecommendationTaskStatus(rec.taskId, ['queued'], 'running');
     await ctx.recommendation.commitRecommendationResult(rec.taskId, {

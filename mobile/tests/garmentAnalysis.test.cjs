@@ -186,6 +186,8 @@ async function setup(options = {}) {
   const secureStore = createSecureStoreStub(options.keys);
   const fetch = createFakeFetch(options.handler ?? (() => okResponse('{}')));
   const { adapter } = createMemoryAdapter();
+  // M6 批次 1.4：ai_configs 表在 v6 建立，配置读写依赖迁移完成
+  await loadDbModule().runMigrations(adapter);
   const loader = createAiLoader({ fileSystem, secureStore, fetch, adapter });
   return { fileSystem, secureStore, fetch, adapter, ...loader };
 }
@@ -241,25 +243,29 @@ const runInput = (over = {}) => ({
 
 test('路由：无配置 / 只有文本模型 → missing', async () => {
   const noConfig = await setup();
+  await noConfig.ai('configStore').ensureConfigCache();
   assert.equal((await noConfig.ai('visionConfig').resolveVisionConfig()).status, 'missing');
 
   const textOnly = await setup();
   seedConfigs(textOnly.fileSystem, [visionConfig({ capabilities: ['text'] })]);
+  // M6 批次 1.4：seed 写的是旧 JSON 来源，经 ensureConfigCache 迁入本地库后才可读
+  await textOnly.ai('configStore').ensureConfigCache();
   assert.equal((await textOnly.ai('visionConfig').resolveVisionConfig()).status, 'missing');
 });
 
-test('路由：配置损坏 → invalid(config_unreadable)，不改写原文件', async () => {
+test('路由：旧配置文件损坏 → 迁移按无配置处理（missing），不改写原文件', async () => {
   const { fileSystem, ai } = await setup();
   seedConfigFileRaw(fileSystem, '{ 这不是 JSON');
+  await ai('configStore').ensureConfigCache();
   const resolution = await ai('visionConfig').resolveVisionConfig();
-  assert.equal(resolution.status, 'invalid');
-  assert.equal(resolution.reason, 'config_unreadable');
+  assert.equal(resolution.status, 'missing');
   assert.equal(fileSystem.files.get(CONFIG_FILE_PATH), '{ 这不是 JSON');
 });
 
 test('路由：地址或模型 ID 无效 → invalid(config_invalid)', async () => {
   const { fileSystem, ai } = await setup({ keys: { 'ai-key-cfg-1': 'sk-1' } });
   seedConfigs(fileSystem, [visionConfig({ baseUrl: 'not-a-url' })]);
+  await ai('configStore').ensureConfigCache();
   const resolution = await ai('visionConfig').resolveVisionConfig();
   assert.equal(resolution.status, 'invalid');
   assert.equal(resolution.reason, 'config_invalid');
@@ -268,6 +274,7 @@ test('路由：地址或模型 ID 无效 → invalid(config_invalid)', async () 
 test('路由：有视觉配置但读不到密钥 → invalid(key_missing)', async () => {
   const { fileSystem, ai } = await setup();
   seedConfigs(fileSystem, [visionConfig()]);
+  await ai('configStore').ensureConfigCache();
   const resolution = await ai('visionConfig').resolveVisionConfig();
   assert.equal(resolution.status, 'invalid');
   assert.equal(resolution.reason, 'key_missing');
@@ -276,6 +283,7 @@ test('路由：有视觉配置但读不到密钥 → invalid(key_missing)', asyn
 test('路由：唯一候选且无默认 → ready；密钥以安全存储为准（hasKey 过期不影响）', async () => {
   const { fileSystem, ai } = await setup({ keys: { 'ai-key-cfg-1': 'sk-1' } });
   seedConfigs(fileSystem, [visionConfig({ hasKey: false })]);
+  await ai('configStore').ensureConfigCache();
   const resolution = await ai('visionConfig').resolveVisionConfig(null);
   assert.equal(resolution.status, 'ready');
   assert.equal(resolution.config.id, 'cfg-1');
@@ -291,12 +299,14 @@ test('路由：多个候选 → choose；默认仍有效 → ready', async () =>
 
   const choose = await setup({ keys });
   seedConfigs(choose.fileSystem, configs);
+  await choose.ai('configStore').ensureConfigCache();
   const chooseResult = await choose.ai('visionConfig').resolveVisionConfig(null);
   assert.equal(chooseResult.status, 'choose');
   assert.deepEqual(plain(chooseResult.candidates.map((c) => c.id)), ['cfg-1', 'cfg-2']);
 
   const ready = await setup({ keys });
   seedConfigs(ready.fileSystem, configs);
+  await ready.ai('configStore').ensureConfigCache();
   const readyResult = await ready.ai('visionConfig').resolveVisionConfig('cfg-2');
   assert.equal(readyResult.status, 'ready');
   assert.equal(readyResult.config.id, 'cfg-2');
@@ -305,6 +315,7 @@ test('路由：多个候选 → choose；默认仍有效 → ready', async () =>
 test('路由：默认失效时即使只剩一个候选也要 choose，不静默切换供应商', async () => {
   const { fileSystem, ai } = await setup({ keys: { 'ai-key-cfg-1': 'sk-1' } });
   seedConfigs(fileSystem, [visionConfig({ id: 'cfg-1', keyRef: 'ai-key-cfg-1' })]);
+  await ai('configStore').ensureConfigCache();
   const resolution = await ai('visionConfig').resolveVisionConfig('cfg-已删除');
   assert.equal(resolution.status, 'choose');
   assert.deepEqual(plain(resolution.candidates.map((c) => c.id)), ['cfg-1']);
