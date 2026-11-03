@@ -17,5 +17,5 @@
 ## 当前工作流
 
 - `src/garment-understanding/`：脚本就绪；APP 动态分析已有真机记录，实验覆盖与质量待完成。
-- `src/try-on-preview/`：MiniMax 路径已接 APP 且有真机全链路记录；真实试穿未完成，服务边界见 `src/try-on-preview/PROVIDERS.md`。
+- `src/try-on-preview/`：MiniMax 路径已接 APP 且有真机全链路记录；真实试穿未完成，服务边界见 `src/try-on-preview/PROVIDERS.md`。 2026-11-04 新增 `compare-paths.ts`（C1 预览路径对照：文字基线 / 文字+核对 / 衣物图输入三臂；garment-image 臂待项目用户选定服务后接适配器，不自动付费调用）。
 - `src/outfit-recommendation/`：已恢复，2026-11-02 首次真实跑批；独立候选校验不等于 M3 共用契约验收。当前进度核对日期 2026-11-03。
