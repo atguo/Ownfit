@@ -7,8 +7,9 @@ import { Button } from '../../ui/components/Button';
 import { useToast } from '../../ui/components/Toast';
 import { DEMO_WEATHER, setContext, useDemoStore } from '../demoStore';
 import { saveSceneDefault } from '../../data/repositories/settingsRepository';
-import { fetchTodayWeather, fetchTodayWeatherByCoords, pickCurrentTemp, type WeatherSnapshot } from '../../services/weather';
-import { locateCity, type LocatedPlace } from '../../services/location';
+import { fetchTodayWeather, pickCurrentTemp, type WeatherSnapshot } from '../../services/weather';
+import type { LocatedPlace } from '../../services/location';
+import { refreshCurrentWeather } from '../weatherAuto';
 import { dayOptions, sceneOptions } from '../../data/demo';
 import { colors, type } from '../../ui/tokens';
 
@@ -16,9 +17,10 @@ import { colors, type } from '../../ui/tokens';
 // 因此“用于这次搭配”只写当次；“保存为常用”才写默认值（用户明确选择）。
 // 天气（M5 轨 C）：可选联网查实时（open-meteo）；失败或未查时保持手动可填；
 // 手动输入与服务数据来源可区分（tempSource：demo/real/manual）。
-// 定位为主、手动为辅（M6 批次 1 补充，2026-11-03 项目用户确认）：打开即自动定位城市并按坐标查天气；
-// 定位不准或拒绝授权时手动修改/填写。坐标降到 4 位小数后只发给天气与城市名解析服务，
-// 不发送衣橱或人物资料；城市名解析失败降级"当前位置"占位，不伪造城市名。
+// 定位为主、手动为辅（M6 批次 1 补充，2026-11-03 项目用户确认）：APP 启动/回前台/打开弹层
+// 都会自动定位并查天气（weatherAuto 编排，本表单共享同一条链路）；定位不准或拒绝授权时
+// 手动修改/填写。坐标降到 4 位小数后只发给天气与城市名解析服务，不发送衣橱或人物资料；
+// 城市名解析失败降级"当前位置"占位，不伪造城市名。
 // 失效处理（M6 批次 1.3）：实时天气是"某城市某日"的数据——改城市/改日期即失效并清空重查；
 // 未提供新温度时，旧实时温度回退为示例占位（明确标注），不把旧天气冒充新地点/新日期的天气。
 
@@ -47,31 +49,40 @@ export function SceneSheet({ visible, onClose }: { visible: boolean; onClose: ()
   const [locating, setLocating] = useState(false);
   const [locateNote, setLocateNote] = useState<string | null>(null);
 
-  // 打开即自动定位（定位为主、手动为辅）：权限未决定时弹一次系统授权；
-  // 拒绝过则不再弹，仅提示可手动填写。每次打开都尝试——授权用户自动获得最新城市。
+  // 打开弹层：与启动/回前台共用 weatherAuto 同一条自动链路（节流共享，不重复请求）。
+  // force=false 时若 context 已有新鲜实时天气则直接对齐表单，不再定位。
   useEffect(() => {
     if (!visible) return;
-    void runLocate();
+    void runRefresh(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  async function runLocate() {
+  async function runRefresh(force: boolean) {
     setLocating(true);
     setLocateNote(null);
     try {
-      const result = await locateCity(true);
-      if (result.ok) {
+      const result = await refreshCurrentWeather({ force });
+      if (!result.ran) {
+        // 节流跳过：context 已是新鲜实时天气，表单对齐即可
+        setCity(context.city);
+        return;
+      }
+      if (result.place) {
         setLocated(result.place);
         setCity(result.place.label);
         invalidateWeather(result.place.label, day);
+        if (result.weather) {
+          setWeather(result.weather);
+          setWeatherFor({ city: result.place.label, day: '今天' });
+        }
         setLocateNote(
-          result.place.resolved
-            ? null
-            : '已按当前位置查天气；未能解析城市名，可手动修改地点',
+          result.locateMessage ??
+            (result.place.resolved ? null : '已按当前位置查天气；未能解析城市名，可手动修改地点'),
         );
       } else {
-        setLocateNote(result.message);
+        setLocateNote(result.locateMessage);
       }
+      if (result.weatherMessage) setWeatherError(result.weatherMessage);
     } finally {
       setLocating(false);
     }
@@ -87,8 +98,13 @@ export function SceneSheet({ visible, onClose }: { visible: boolean; onClose: ()
     }
   }
 
-  async function loadWeather() {
+  /** 「查实时天气」按钮：城市被手动改过 → 按城市名解析查询（不改定位结果）；仍是定位城市 → 走自动链路强制重查 */
+  async function queryWeather() {
     const trimmed = city.trim();
+    if (located && trimmed === located.label) {
+      await runRefresh(true);
+      return;
+    }
     if (!trimmed) {
       setWeatherError('请先填写城市名');
       return;
@@ -102,11 +118,7 @@ export function SceneSheet({ visible, onClose }: { visible: boolean; onClose: ()
     setWeatherError(null);
     setWeather(null);
     try {
-      // 定位结果未被手动修改时按坐标直查（跳过城市名解析）；手动改过的城市按名称解析
-      const place = located && trimmed === located.label ? located : null;
-      const result = place
-        ? await fetchTodayWeatherByCoords(place.lat, place.lon)
-        : await fetchTodayWeather(trimmed);
+      const result = await fetchTodayWeather(trimmed);
       if (result.ok) {
         setWeather(result.snapshot);
         setWeatherFor({ city: trimmed, day });
@@ -180,7 +192,7 @@ export function SceneSheet({ visible, onClose }: { visible: boolean; onClose: ()
         <Button
           variant="text"
           label={locating ? '定位中…' : '使用当前位置'}
-          onPress={() => void runLocate()}
+          onPress={() => void runRefresh(true)}
           disabled={locating}
           style={styles.locateButton}
         />
@@ -208,7 +220,7 @@ export function SceneSheet({ visible, onClose }: { visible: boolean; onClose: ()
         <Button
           variant="secondary"
           label={weatherLoading ? '查询中…' : '查实时天气（需联网）'}
-          onPress={() => void loadWeather()}
+          onPress={() => void queryWeather()}
           disabled={weatherLoading}
         />
         {weather ? (

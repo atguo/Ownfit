@@ -157,3 +157,51 @@ test('系统定位服务关闭 → unavailable；定位超时 → timeout，均�
   assert.equal(timeout.ok, false);
   assert.equal(timeout.kind, 'timeout');
 });
+
+// ---- 2026-11-03 补充：缓存位置优先 + 实定位重试（打开 APP 自动查询的提速与可靠性）----
+
+test('缓存位置命中（10 分钟内）→ 直接采用，不调实定位', async () => {
+  let getCurrentCalls = 0;
+  const expo = baseExpo({
+    getLastKnownPositionAsync: async () => ({ coords: { latitude: 31.2, longitude: 121.5 }, timestamp: Date.now() }),
+    getCurrentPositionAsync: async () => {
+      getCurrentCalls += 1;
+      return fixAt(1, 1);
+    },
+    reverseGeocodeAsync: async () => [{ city: '上海市' }],
+  });
+  const api = loadLocation({ expoLocation: expo, fetchImpl: async () => { throw new Error('不应调用'); } });
+  const result = await api.locateCity(true);
+  assert.equal(result.ok, true);
+  assert.equal(result.place.label, '上海市');
+  assert.equal(result.place.lat, 31.2);
+  assert.equal(getCurrentCalls, 0, '缓存新鲜时不应再实定位');
+});
+
+test('无缓存：实定位失败一次 → 退避重试成功（短超时注入，不真等 15 秒）', async () => {
+  let attempts = 0;
+  const expo = baseExpo({
+    getCurrentPositionAsync: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('timeout');
+      return fixAt(30.9, 120.1);
+    },
+    reverseGeocodeAsync: async () => [{ city: '湖州市' }],
+  });
+  const api = loadLocation({ expoLocation: expo, fetchImpl: async () => { throw new Error('不应调用'); } });
+  const result = await api.locateCity(true, { fixTimeoutMs: 50 });
+  assert.equal(result.ok, true);
+  assert.equal(result.place.label, '湖州市');
+  assert.equal(attempts, 2, '失败后应重试一次');
+});
+
+test('注入短超时：两次尝试都超时 → timeout 分类，提示已重试', async () => {
+  const expo = baseExpo({
+    getCurrentPositionAsync: () => new Promise(() => {}),
+  });
+  const api = loadLocation({ expoLocation: expo, fetchImpl: async () => { throw new Error('不应调用'); } });
+  const result = await api.locateCity(true, { fixTimeoutMs: 50 });
+  assert.equal(result.ok, false);
+  assert.equal(result.kind, 'timeout');
+  assert.match(result.message, /已自动重试/);
+});

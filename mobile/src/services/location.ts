@@ -1,5 +1,7 @@
 // 手机定位服务（M6 批次 1 补充，天气文档 §2"授权位置或手动选择"）：
 // - 定位为主、手动为辅：权限未决定时请求一次；拒绝后不再自动重复请求，由用户点按钮重试或手动填写
+// - 位置获取策略（2026-11-03 补充）：先取 10 分钟内的缓存位置（秒出，不等 GPS 收敛）；
+//   没有缓存再实定位，单次 15 秒、失败退避 2 秒重试一次——冷启动首修慢是真机超时主因
 // - 坐标精度降到 4 位小数（约 11 米）再外发，天气足够且少暴露精确位置
 // - 坐标只发给天气服务（open-meteo）与城市名解析服务；绝不发送衣橱或人物资料；整体可拒绝用手动
 // - 城市名解析链：平台逆地理（Android 无 GMS 时常不可用）→ 免 Key 解析服务（BigDataCloud 客户端接口）→
@@ -25,12 +27,21 @@ export type LocateResult =
       message: string;
     };
 
-const FIX_TIMEOUT_MS = 10000;
+const FIX_TIMEOUT_MS = 15000;
 const RESOLVE_TIMEOUT_MS = 8000;
 const RESOLVE_URL = 'https://api.bigdatacloud.net/data/reverse-geocode-client';
+/** 缓存位置的新鲜度上限：10 分钟内的 lastKnown 直接采用（城市级天气足够，秒出不用等 GPS 收敛） */
+const LAST_KNOWN_MAX_AGE_MS = 10 * 60 * 1000;
+/** 实定位尝试次数：冷启动 GPS 首次收敛慢是真机超时主因，失败后短暂退避再试一次 */
+const FIX_TRIES = 2;
+const RETRY_DELAY_MS = 2000;
 
 function round4(value: number): number {
   return Number(value.toFixed(4));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -86,10 +97,13 @@ async function serviceReverseGeocode(lat: number, lon: number): Promise<string |
 /**
  * 定位当前城市。
  * @param promptWhenUndetermined 权限未决定时是否弹系统授权（自动定位=true；拒绝过的用户点按钮重试=true）
+ * @param opts.fixTimeoutMs 单次实定位超时（测试可注入短超时；生产默认 15 秒）
  */
 export async function locateCity(
   promptWhenUndetermined: boolean,
+  opts: { fixTimeoutMs?: number } = {},
 ): Promise<LocateResult> {
+  const fixTimeoutMs = opts.fixTimeoutMs ?? FIX_TIMEOUT_MS;
   try {
     const current = await Location.getForegroundPermissionsAsync();
     let granted = current.granted;
@@ -110,18 +124,37 @@ export async function locateCity(
       return { ok: false, kind: 'unavailable', message: '系统定位服务未开启，开启后可自动定位' };
     }
 
-    let fix: { coords: { latitude: number; longitude: number } };
+    let fix: { coords: { latitude: number; longitude: number } } | null = null;
+    // 先取缓存位置（10 分钟内）：打开即用，不等 GPS 收敛
     try {
-      fix = await withTimeout(
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-        FIX_TIMEOUT_MS,
-      );
-    } catch (error) {
-      const timedOut = error instanceof Error && error.message === 'timeout';
+      const last = await Location.getLastKnownPositionAsync({ maxAge: LAST_KNOWN_MAX_AGE_MS });
+      if (last) fix = { coords: last.coords };
+    } catch {
+      // 缓存不可用继续实定位
+    }
+
+    // 缓存没有/过期：实定位，失败退避重试（冷启动首修耗时常超 10s，真机超时主因）
+    let lastError: 'timeout' | 'no_fix' = 'no_fix';
+    for (let attempt = 0; !fix && attempt < FIX_TRIES; attempt += 1) {
+      if (attempt > 0) await sleep(RETRY_DELAY_MS);
+      try {
+        const current = await withTimeout(
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          fixTimeoutMs,
+        );
+        fix = { coords: current.coords };
+      } catch (error) {
+        lastError = error instanceof Error && error.message === 'timeout' ? 'timeout' : 'no_fix';
+      }
+    }
+    if (!fix) {
       return {
         ok: false,
-        kind: timedOut ? 'timeout' : 'no_fix',
-        message: timedOut ? '定位超时，可稍后重试或手动填写' : '暂时拿不到定位，可手动填写城市',
+        kind: lastError,
+        message:
+          lastError === 'timeout'
+            ? '定位超时（已自动重试），可稍后再试或手动填写'
+            : '暂时拿不到定位，可手动填写城市',
       };
     }
 

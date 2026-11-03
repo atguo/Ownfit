@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ToastProvider } from '../ui/components/Toast';
 import { Button } from '../ui/components/Button';
 import { initGarmentTaskRunner } from '../features/garmentAnalysisStore';
+import { refreshCurrentWeather } from '../features/weatherAuto';
 import { ensureConfigCache } from '../services/ai/configStore';
 import { getLastDbInitFailure, getDb, type DbInitFailure } from '../data/db';
 import { colors, radius, type } from '../ui/tokens';
@@ -55,6 +56,9 @@ export default function RootLayout() {
       } catch {
         if (mounted) setInitFailed(true);
       }
+      // 打开 APP 自动定位+查天气（M6 批次 1 补充，weatherAuto 内部节流）；
+      // 不阻塞启动流程，失败保持占位不打扰
+      void refreshCurrentWeather().catch(() => undefined);
     })();
 
     // M4 安全模式：启动即探测数据库；失败时全局提示并允许重试
@@ -62,6 +66,8 @@ export default function RootLayout() {
 
     const subscription = AppState.addEventListener('change', (next) => {
       runner.setForeground(next === 'active');
+      // 回到前台：天气超过 2 小时或跨日时自动重查（weatherAuto 节流，新鲜则跳过）
+      if (next === 'active') void refreshCurrentWeather().catch(() => undefined);
     });
 
     return () => {
