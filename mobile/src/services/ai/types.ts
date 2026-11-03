@@ -72,8 +72,13 @@ export function isVisionCandidate(config: ModelConfig): boolean {
   );
 }
 
-/** 拼接规则由 urlKind 决定（2026-10-27 确认的首批清单） */
+/**
+ * 实际请求地址（2026-11-03 项目用户确认调整）：
+ * - openai：baseUrl 填到版本号为止（如 https://api.openai.com/v1），自动拼接 /chat/completions；
+ * - minimax：baseUrl 即完整图像生成接口地址（如 https://api.minimax.cn/v1/image_generation），不再自动拼接——
+ *   不同图像服务的接口路径可能完全不同，自动补路径会产生 /v1/v1/... 这类错误地址（真机 404 实证）。
+ */
 export function endpointFor(kind: UrlKind, baseUrl: string): string {
   const base = baseUrl.replace(/\/+$/, '');
-  return kind === 'openai' ? `${base}/chat/completions` : `${base}/v1/image_generation`;
+  return kind === 'openai' ? `${base}/chat/completions` : base;
 }

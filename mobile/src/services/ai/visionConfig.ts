@@ -30,7 +30,7 @@ export async function resolveVisionConfig(defaultConfigId?: string | null): Prom
     return {
       status: 'invalid',
       reason: 'config_unreadable',
-      message: '本地模型配置无法读取（文件可能已损坏），请到“模型配置”检查后重试',
+      message: '本地模型配置尚未就绪或无法读取，请稍后重试或到“模型配置”检查',
     };
   }
 
@@ -91,7 +91,7 @@ export async function resolveTextConfig(defaultConfigId?: string | null): Promis
     return {
       status: 'invalid',
       reason: 'config_unreadable',
-      message: '本地模型配置无法读取（文件可能已损坏），请到“模型配置”检查后重试',
+      message: '本地模型配置尚未就绪或无法读取，请稍后重试或到“模型配置”检查',
     };
   }
 
@@ -129,7 +129,7 @@ export async function resolveImageGenConfig(defaultConfigId?: string | null): Pr
     return {
       status: 'invalid',
       reason: 'config_unreadable',
-      message: '本地模型配置无法读取（文件可能已损坏），请到“模型配置”检查后重试',
+      message: '本地模型配置尚未就绪或无法读取，请稍后重试或到“模型配置”检查',
     };
   }
 

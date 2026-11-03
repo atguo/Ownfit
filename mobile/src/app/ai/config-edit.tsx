@@ -101,6 +101,10 @@ export default function AiConfigEditScreen() {
   function validate(): string | null {
     if (!name.trim()) return '请填写名称';
     if (!baseUrl.trim()) return '请填写服务地址';
+    if (!/^https?:\/\//i.test(baseUrl.trim())) return '服务地址需以 http:// 或 https:// 开头';
+    if (isMinimax && !/\/[a-z]/i.test(baseUrl.trim().replace(/^https?:\/\//i, ''))) {
+      return '图像服务需填写完整接口地址（含路径，如 /v1/image_generation）';
+    }
     if (!modelId.trim()) return '请填写模型 ID';
     if (!existing && !apiKey.trim()) return '请填写 API Key';
     if (!capabilities.length) return '请至少选择一项能力';
@@ -191,11 +195,17 @@ export default function AiConfigEditScreen() {
         </View>
       </Field>
 
-      <Field label="服务地址（基础地址，接口路径自动拼接）">
+      <Field
+        label={
+          isMinimax
+            ? '服务地址（完整 API 地址，直接调用不拼接）'
+            : '服务地址（填到版本号为止，自动拼接 /chat/completions）'
+        }
+      >
         <TextField
           value={baseUrl}
           onChangeText={setBaseUrl}
-          placeholder={isMinimax ? 'https://api.minimaxi.com' : 'https://api.example.com/v1'}
+          placeholder={isMinimax ? 'https://api.minimax.cn/v1/image_generation' : 'https://api.example.com/v1'}
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="url"
