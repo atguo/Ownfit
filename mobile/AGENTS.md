@@ -100,3 +100,16 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 验证：mobile 回归 **117/117**（新增 `bodyProfile.test.cjs` 3 项：存取/清除/损坏记录、前缀纪律；`endpoint.test.cjs` 增 https 校验；`recommendationInputs.test.cjs` 增身材入队快照与指纹、提示词身材段、执行器消毒断言，promptVersion 断言更新 v3）；契约样例 7+15 组通过；`pnpm typecheck` 通过——顺带修复 `src/ui/screen.tsx`→`Screen.tsx`（TS 6 强制一致命名报错；11 处导入均为 `Screen`，改名跟随导入侧与 Icon/PageTop 组件命名惯例）。本机 `expo prebuild -p android` 核验：`ownfitReleaseSigning` 注入 3 处、manifest 无 `usesCleartextTraffic`、版本号生效。
 
 **未验证边界**：身材录入 UI 与提示词实际效果未真机走查；keystore 生成、`assembleRelease`、apksigner 验签与 release 真机启动验证须在构建机执行（当前开发机无 Android 工具链）；明文拦截的运行时错误表现未实测。完成前不宣称内测候选包就绪。
+
+### 核心目标能力改进批次（2026-11-04 实现完成，待真机走查）
+
+依据[能力改进建议](../docs/plans/2026-11-03-围绕核心目标的能力改进建议.md)与[计划落地代码评审](../docs/plans/2026-11-03-计划落地代码评审.md)，项目用户确认四项决定（任务范围=通勤/日常外出+上装/下装/鞋/外套≤2层、预览=文字路径+防偏闭环、D3 提前、放行口径=三层结论）后授权自主实施全部批次；实施决策 D-1～D-16 登记于[落地计划与决策记录](../docs/plans/2026-11-04-核心目标能力改进-落地计划与决策记录.md)。真实模型调用 0 次；效果结论未知。M6 批次 2 的身材链路在本批次中沿用并随提示词升 v4。
+
+- **数据**：schema **v7**——`preview_checks`（C8 核对记录）、`preview_comparisons`（C5 比较组）、`plan_items.wear_style`（C4 逐件穿法）、`worn_records.reasons`（D3 反馈原因 JSON）。搭配契约升 **1.1.0**（`Plan.items` 可选 per-item wearStyle，顶层 wear 保留兼容；契约样例 9 组，package.json 同步 1.1.0）。
+- **衣物证据（A1/A2/A3）**：`getAnalysisView` 有效值改为"同名人工行优先、AI 行其次"（重新分析不再静默覆盖人工确认值，历史行保留可比较）；推荐/预览名称用户名称优先；新增 `services/ai/garmentView.ts` 归一化视图（关键特征/次要分层、主色 hex，推荐/预览/核对三处同源）与 `services/ai/evidenceCheck.ts`（锁定单品证据缺口提示，可跳过，不全柜拦截）。
+- **推荐（B1/B2/B4/B5/B6）**：请求摘要可见可改——锁定件数、选填"本次要求"（随快照入 `input_json`，仅当次）、长期偏好全部参与排序；提示词升 **v4**（锁定/偏好/当次要求/天气描述/截取说明）；档案超 40 件按"锁定优先+创建顺序"截取并如实注明（`loadProfileForRunner`，别名保持全柜编号不重排）；本地可执行校验进 `normalizeRecommendation`（重复单品/槽位、连衣裙冲突、包/配饰拒绝、锁定覆盖、相同组合去重）；`SlotReplaceSheet` 增"AI 推荐替代"（其余槽位随请求锁定，决策 D-6）；实时天气描述进场景文本（B6）。
+- **槽位（B3/R2/R3）**：`OutfitSlot` 增加 `outer`（外套独立槽位，与上衣共存），采用/复用/保存按品类归槽不再丢外套；采用时保留请求锁定集与可用性/槽位冲突拒绝；包/配饰明确"本期不支持"（D-1；RealOutfitBoard 几何不变，外套在单品行呈现，D-16）。
+- **预览（C2/C3/C5/C7/C8）**：入队快照（`input_json`）固定单品集+各单品 `items.revision`+穿法（含逐件）+参考版本与视角，执行前校验不一致标 `stale`（旧图不冒充当前输入）；"本方案"判定按完整输入版本（`previewInputMatches`）；提示词按重要性组织（身份层→次要层，预算 6000 字符，超限显式失败 `prompt_over_budget`），`minimaxClient` 去除 1500 字符静默截断（C7）；生成后自动视觉核对（`previewChecker.ts` + `preview_checks` 表）：单品原图+人物参考+生成图逐项 match/deviate/unknown，重大偏离自动纠偏最多 1 次（D-3），无视觉模型诚实登记 `unchecked`（核对路由复用衣物分析视觉默认配置，D-15）；参考照可声明"面部特写/全身照"（C3，视角变化视为参考版本变化）；`preview_comparisons` 同参考版本双方案并排比较（C5）。
+- **反馈（D1/D3）**：FeedbackSheet 先等 `recordWorn` 落库成功再提示（失败保留用户选择）；满意/不满意后提供 4 个可跳过原因（看着不喜欢/穿着不舒服/冷热不合适/预览不像实物，可多选，关联方案版本）。
+- **工程收口（R1/R6/R8/R9）**：三 runner（分析/推荐/预览）生命周期统一由 `app/_layout.tsx` 管理（启动恢复一次、前台跟随 AppState；面板只订阅，不再 recover/setForeground——生成中开关面板不再误标 interrupted）；`commitRecommendationResult` 条件提交（仅 running 可写，迟到结果不覆盖终态）；预览保存失败持久化 `pendingUrl`，面板可"仅重试下载"（不重新生成、不重复计费）；两执行器看门狗定时器清理；`weatherAuto` 天气绑定日期/城市/有效期（查看"明天"不写今日温度、城市变化后失败回退占位、过期刷新失败降级 demo 来源）；复用方案保留 source/reason/锁定/父版本与逐件穿法，换件后保存理由标"（搭配已修改，以下为原始推荐理由）"（R9/D-14）。
+- 回归：`node --test mobile/tests/*.test.cjs` 全量通过（新增 `coreGoalLoop.test.cjs` 14 项：B1/B3/B4/A2/C3/C7/C8/C2/C4/C5/D3/R8；weatherAuto 增 R6 3 项；garmentTasks A1 语义更新；preview 用例随快照与新提示词形状更新；recommendationInputs promptVersion 断言升 v4）；`pnpm typecheck` 通过；契约样例 9+15 组通过。**真机走查待项目用户执行**；核对器质量需人工样本校准后才能宣称防偏有效。
