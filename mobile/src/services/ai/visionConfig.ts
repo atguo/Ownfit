@@ -76,6 +76,43 @@ export async function resolveVisionConfig(defaultConfigId?: string | null): Prom
   return { status: 'choose', candidates: usable };
 }
 
+/** 文本候选：OpenAI 兼容 URL + text 能力标签（搭配推荐用） */
+function isTextCandidate(config: ModelConfig): boolean {
+  return config.urlKind === 'openai' && config.capabilities.includes('text') && !!config.baseUrl && !!config.modelId;
+}
+
+/**
+ * 解析可用的文本模型配置（搭配推荐用）。
+ * 规则与 resolveVisionConfig 一致：missing/invalid/choose/ready，默认失效不静默切换。
+ */
+export async function resolveTextConfig(defaultConfigId?: string | null): Promise<ConfigResolution> {
+  const read = loadConfigsStructured();
+  if (!read.ok) {
+    return {
+      status: 'invalid',
+      reason: 'config_unreadable',
+      message: '本地模型配置无法读取（文件可能已损坏），请到“模型配置”检查后重试',
+    };
+  }
+
+  const usable: ModelConfig[] = [];
+  for (const config of read.configs.filter(isTextCandidate)) {
+    const key = await getApiKey(config.keyRef);
+    if (key) usable.push(config);
+  }
+  if (usable.length === 0) return { status: 'missing' };
+
+  const preferred = defaultConfigId ? usable.find((config) => config.id === defaultConfigId) : undefined;
+  if (preferred) {
+    return { status: 'ready', config: preferred, callRevision: callRevisionOf(preferred) };
+  }
+  if (!defaultConfigId && usable.length === 1) {
+    const only = usable[0];
+    return { status: 'ready', config: only, callRevision: callRevisionOf(only) };
+  }
+  return { status: 'choose', candidates: usable };
+}
+
 /** 图像生成候选：MiniMax 图像 URL 类型 + image_gen 能力标签 */
 function isImageGenCandidate(config: ModelConfig): boolean {
   return config.urlKind === 'minimax' && config.capabilities.includes('image_gen') && !!config.baseUrl && !!config.modelId;

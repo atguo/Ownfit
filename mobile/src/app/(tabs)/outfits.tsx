@@ -5,6 +5,7 @@ import { Page } from '../../ui/Screen';
 import { PageTop } from '../../ui/PageTop';
 import { Button } from '../../ui/components/Button';
 import { EmptyState, Tag } from '../../ui/components/Basics';
+import { RecommendationSheet } from '../../features/sheets/RecommendationSheet';
 import { FeedbackSheet } from '../../features/sheets/FeedbackSheet';
 import { loadOutfitFrom } from '../../features/outfitSession';
 import { listPlans, type SavedPlan } from '../../data/repositories/planRepository';
@@ -22,6 +23,7 @@ export default function OutfitsScreen() {
   const [plans, setPlans] = useState<SavedPlan[]>([]);
   const [filter, setFilter] = useState<(typeof filters)[number]>('全部');
   const [feedbackId, setFeedbackId] = useState<string | null>(null);
+  const [recommendOpen, setRecommendOpen] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -65,6 +67,14 @@ export default function OutfitsScreen() {
   return (
     <Page>
       <PageTop title="我的搭配" sub="把喜欢的，留给下一次。" />
+
+      <Button
+        variant="secondary"
+        icon="spark"
+        label="AI 帮我搭一套"
+        onPress={() => setRecommendOpen(true)}
+        style={styles.aiButton}
+      />
 
       <View style={styles.chips}>
         {filters.map((c) => (
@@ -130,6 +140,7 @@ export default function OutfitsScreen() {
         </EmptyState>
       )}
 
+      <RecommendationSheet visible={recommendOpen} onClose={() => setRecommendOpen(false)} />
       <FeedbackSheet
         planId={feedbackId}
         onClose={() => {
@@ -170,6 +181,10 @@ function PlanThumb({ itemId }: { itemId: string }) {
 }
 
 const styles = StyleSheet.create({
+  aiButton: {
+    marginBottom: 8,
+  },
+
   chips: {
     flexDirection: 'row',
     gap: 8,

@@ -1,0 +1,265 @@
+// 搭配推荐任务执行器（M5 轨 B4）：文本模型生成候选组合。
+// 与 previewTaskRunner 相同的状态机语义：发送前写 running、启动恢复标 interrupted、
+// 异常兜底不留 running、执行级看门狗保证任务必达终态。
+// 生成 = OpenAI 兼容 chatCompletion（文本模型），无下载步骤。
+
+import { getConfig, getApiKey } from './configStore';
+import { callRevisionOf, type ModelConfig } from './types';
+import { chatCompletion } from './openaiClient';
+import {
+  buildRecommendationInputKey,
+  normalizeRecommendation,
+  parseRecommendationContent,
+  recommendationSystemPrompt,
+  recommendationUserPrompt,
+  RECOMMENDATION_PROMPT_VERSION,
+  type ProfileItem,
+  type RecommendationCandidate,
+} from './recommendationService';
+import {
+  commitRecommendationResult,
+  getRecommendationTask,
+  listRecommendationTasksByStatus,
+  updateRecommendationTaskStatus,
+  type RecommendationTask,
+  type RecommendationTaskStatus,
+} from '../../data/repositories/recommendationRepository';
+
+export interface RecommendationRunnerDeps {
+  listQueued(): Promise<RecommendationTask[]>;
+  listRunning(): Promise<RecommendationTask[]>;
+  getTask(id: string): Promise<RecommendationTask | null>;
+  markRunning(id: string): Promise<boolean>;
+  updateStatus(
+    id: string,
+    allowedFrom: RecommendationTaskStatus[],
+    to: RecommendationTaskStatus,
+    patch?: { errorKind?: string | null; errorSummary?: string | null; finishedAt?: string | null },
+  ): Promise<boolean>;
+  getConfig(id: string): ModelConfig | undefined;
+  getApiKey(keyRef: string): Promise<string | null>;
+  /** 读取当前衣物档案（已入库单品，别名 → 真实 id 映射一并返回） */
+  loadProfile(): Promise<{ items: ProfileItem[]; idByAlias: Map<string, string> }>;
+  /** 当次场景快照 */
+  loadScene(): Promise<{ city: string; day: string; scene: string; temp?: string }>;
+  /** 候选落库（succeeded 提交） */
+  commitResult(
+    taskId: string,
+    result: { candidates: RecommendationCandidate[]; gaps: string[]; summary?: string },
+  ): Promise<void>;
+  onSettled?(): void;
+  subscribeChanges?(listener: () => void): () => void;
+}
+
+export interface RecommendationRunner {
+  start(): void;
+  setForeground(value: boolean): void;
+  recover(): Promise<void>;
+  handleExternalChange(): Promise<void>;
+}
+
+const EXECUTE_WATCHDOG_MS = 90000;
+const CHAT_TIMEOUT_MS = 60000;
+const UNKNOWN_OUTCOME_KINDS: readonly string[] = ['timeout', 'network', 'cancelled'];
+
+export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): RecommendationRunner {
+  let started = false;
+  let foreground = false;
+  let loopRunning = false;
+  let unsubscribe: (() => void) | null = null;
+
+  async function claimNext(): Promise<RecommendationTask | null> {
+    const queued = await deps.listQueued();
+    for (const task of queued) {
+      const config = deps.getConfig(task.configId);
+      if (!config || callRevisionOf(config) !== task.configRevision) {
+        await deps.updateStatus(task.id, ['queued'], 'blocked', {
+          finishedAt: new Date().toISOString(),
+          errorKind: 'config_changed',
+          errorSummary: '所选模型配置已被修改或删除，请重新生成',
+        });
+        deps.onSettled?.();
+        continue;
+      }
+      if (await deps.markRunning(task.id)) {
+        deps.onSettled?.();
+        return { ...task, status: 'running' };
+      }
+    }
+    return null;
+  }
+
+  async function runClaimed(task: RecommendationTask, markSent: () => void): Promise<void> {
+    const config = deps.getConfig(task.configId);
+    if (!config) return;
+
+    const apiKey = await deps.getApiKey(config.keyRef);
+    if (!apiKey) {
+      await deps.updateStatus(task.id, ['running'], 'blocked', {
+        finishedAt: new Date().toISOString(),
+        errorKind: 'config_invalid',
+        errorSummary: '所选模型配置缺少可读取的 API Key',
+      });
+      return;
+    }
+
+    const { items, idByAlias } = await deps.loadProfile();
+    if (items.length === 0) {
+      await deps.updateStatus(task.id, ['running'], 'failed', {
+        finishedAt: new Date().toISOString(),
+        errorKind: 'profile_empty',
+        errorSummary: '衣橱里没有已入库衣物，先录入并确认品类后再用 AI 推荐',
+      });
+      return;
+    }
+    const scene = await deps.loadScene();
+
+    const controller = new AbortController();
+    markSent();
+    let content: string;
+    try {
+      const chat = await chatCompletion(
+        { urlKind: config.urlKind, baseUrl: config.baseUrl, modelId: config.modelId },
+        apiKey,
+        [
+          { role: 'system', content: recommendationSystemPrompt() },
+          { role: 'user', content: recommendationUserPrompt({ items, scene }) },
+        ],
+        CHAT_TIMEOUT_MS,
+        { maxTokens: 2048, signal: controller.signal },
+      );
+      if (!chat.ok) {
+        const failure = chat.error ?? { kind: 'unknown', message: '调用失败' };
+        const unknown = UNKNOWN_OUTCOME_KINDS.includes(failure.kind);
+        await deps.updateStatus(task.id, ['running'], unknown ? 'interrupted' : 'failed', {
+          finishedAt: new Date().toISOString(),
+          errorKind: failure.kind,
+          errorSummary: failure.message,
+        });
+        return;
+      }
+      content = chat.content;
+    } finally {
+      void controller;
+    }
+
+    const parsedContent = parseRecommendationContent(content);
+    if (!parsedContent.ok) {
+      await deps.updateStatus(task.id, ['running'], 'failed', {
+        finishedAt: new Date().toISOString(),
+        errorKind: 'invalid_output',
+        errorSummary: parsedContent.error,
+      });
+      return;
+    }
+    const normalized = normalizeRecommendation(parsedContent.value, idByAlias);
+    if (!normalized.ok) {
+      await deps.updateStatus(task.id, ['running'], 'failed', {
+        finishedAt: new Date().toISOString(),
+        errorKind: 'invalid_output',
+        errorSummary: normalized.error,
+      });
+      return;
+    }
+
+    await deps.commitResult(task.id, normalized.value);
+    await deps.updateStatus(task.id, ['running'], 'succeeded', {
+      finishedAt: new Date().toISOString(),
+    });
+  }
+
+  async function execute(task: RecommendationTask): Promise<void> {
+    let sent = false;
+    let timerFired = false;
+
+    const run = (async (): Promise<'done' | 'error'> => {
+      try {
+        await runClaimed(task, () => {
+          sent = true;
+        });
+        return 'done';
+      } catch (error) {
+        try {
+          await deps.updateStatus(task.id, ['running'], sent ? 'interrupted' : 'failed', {
+            finishedAt: new Date().toISOString(),
+            errorKind: 'internal',
+            errorSummary: `处理意外失败：${error instanceof Error ? error.message : String(error)}`,
+          });
+        } catch {
+          // 兜底也失败：留给下次启动 recover()
+        }
+        return 'error';
+      }
+    })();
+
+    const watchdog = new Promise<'timeout'>((resolve) => {
+      setTimeout(() => {
+        timerFired = true;
+        resolve('timeout');
+      }, EXECUTE_WATCHDOG_MS);
+    });
+
+    const outcome = await Promise.race([run, watchdog]);
+    if (outcome === 'timeout') {
+      await deps
+        .updateStatus(task.id, ['running'], sent ? 'interrupted' : 'failed', {
+          finishedAt: new Date().toISOString(),
+          errorKind: 'watchdog',
+          errorSummary: `执行超过 ${Math.round(EXECUTE_WATCHDOG_MS / 1000)} 秒未完成，已按结果未知处理；可重试`,
+        })
+        .catch(() => undefined);
+    }
+    deps.onSettled?.();
+  }
+
+  async function loop(): Promise<void> {
+    if (loopRunning) return;
+    loopRunning = true;
+    try {
+      while (foreground) {
+        const task = await claimNext();
+        if (!task) break;
+        await execute(task);
+      }
+    } finally {
+      loopRunning = false;
+    }
+  }
+
+  function kick(): void {
+    void loop().catch(() => {});
+  }
+
+  async function handleExternalChange(): Promise<void> {
+    if (foreground) kick();
+  }
+
+  return {
+    start(): void {
+      if (started) return;
+      started = true;
+      if (deps.subscribeChanges) unsubscribe = deps.subscribeChanges(() => void handleExternalChange());
+    },
+    setForeground(value: boolean): void {
+      foreground = value;
+      if (value) kick();
+    },
+    async recover(): Promise<void> {
+      const running = await deps.listRunning();
+      for (const task of running) {
+        const changed = await deps.updateStatus(task.id, ['running'], 'interrupted', {
+          finishedAt: new Date().toISOString(),
+          errorKind: 'interrupted',
+          errorSummary: '应用被中断，本次推荐结果未知；可重试',
+        });
+        if (changed) deps.onSettled?.();
+      }
+    },
+    async handleExternalChange(): Promise<void> {
+      if (foreground) kick();
+    },
+  };
+}
+
+/** 推荐输入指纹（store 入队用；与 runner 解耦） */
+export { buildRecommendationInputKey, RECOMMENDATION_PROMPT_VERSION };
