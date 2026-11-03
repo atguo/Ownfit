@@ -156,6 +156,7 @@ async function setup() {
   });
   const load = createLoader(adapter, fsStub, fetchImpl);
   const preview = load(path.join(SRC, 'data/repositories/previewRepository.ts'));
+  const recommendation = load(path.join(SRC, 'data/repositories/recommendationRepository.ts'));
   const settings = load(path.join(SRC, 'data/repositories/settingsRepository.ts'));
   const runnerModule = load(path.join(SRC, 'services/ai/previewTaskRunner.ts'));
   const config = {
@@ -172,7 +173,7 @@ async function setup() {
     createdAt: 't',
     updatedAt: 't',
   };
-  return { db, adapter, close, fsStub, load, preview, settings, runnerModule, config };
+  return { db, adapter, close, fsStub, load, preview, recommendation, settings, runnerModule, config };
 }
 
 /** vm 上下文对象转普通对象，便于 deepEqual */
@@ -197,6 +198,45 @@ function baseCreateInput(over = {}) {
 function configSnapshotValue() {
   return { id: 'cfg-img', name: 'MiniMax 图像', urlKind: 'minimax', baseUrl: 'https://api.example.com', modelId: 'image-01' };
 }
+
+test('删除：预览任务删除后记录与生成图一并清除；推荐记录删除仅删行', async () => {
+  const ctx = await setup();
+  try {
+    // 预览：创建 → running → 落盘 → succeeded → 删除 → 行与文件都消失
+    const { taskId } = await ctx.preview.createPreviewTask(baseCreateInput());
+    await ctx.preview.updatePreviewTaskStatus(taskId, ['queued'], 'running');
+    await ctx.preview.savePreviewResultImage(taskId, 'https://cdn.example.com/gen.jpg', '提示词');
+    await ctx.preview.updatePreviewTaskStatus(taskId, ['running'], 'succeeded');
+    const before = await ctx.preview.getPreviewTask(taskId);
+    assert.equal(before.status, 'succeeded');
+    assert.ok(before.resultPreviewPath, '生成图路径已记录');
+    assert.ok(ctx.fsStub.files.has(`file:///document/${before.resultPreviewPath}`), '生成图已落盘');
+
+    await ctx.preview.deletePreviewTask(taskId);
+    assert.equal(await ctx.preview.getPreviewTask(taskId), null, '任务行已删除');
+    assert.equal(
+      ctx.fsStub.files.has(`file:///document/${before.resultPreviewPath}`),
+      false,
+      '生成图文件一并删除',
+    );
+
+    // 推荐：创建 → 提交候选 → 删除 → 行消失（推荐结果无文件）
+    const rec = await ctx.recommendation.createRecommendationTask(
+      baseCreateInput({ requestKey: 'rec-del-1', inputKey: JSON.stringify({ itemIds: ['item-a', 'item-b'], wearStyle: '自然垂放' }) }),
+    );
+    await ctx.recommendation.updateRecommendationTaskStatus(rec.taskId, ['queued'], 'running');
+    await ctx.recommendation.commitRecommendationResult(rec.taskId, {
+      candidates: [{ slots: [{ role: 'top', itemId: 'item-1' }], wearStyle: '自然垂放' }],
+      gaps: [],
+    });
+    const recBefore = await ctx.recommendation.getRecommendationTask(rec.taskId);
+    assert.equal(recBefore.candidates.length, 1);
+    await ctx.recommendation.deleteRecommendationTask(rec.taskId);
+    assert.equal(await ctx.recommendation.getRecommendationTask(rec.taskId), null);
+  } finally {
+    ctx.close();
+  }
+});
 
 test('人物参考：保存后可读回（含版本），移除后文件与记录一并清除', async () => {
   const ctx = await setup();

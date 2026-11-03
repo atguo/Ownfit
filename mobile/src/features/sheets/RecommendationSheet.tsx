@@ -101,6 +101,30 @@ export function RecommendationSheet({
     })();
   }
 
+  function confirmDelete(taskId: string) {
+    Alert.alert('删除这条推荐记录？', '删除后不可恢复；衣橱与已保存的搭配不受影响。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              const { deleteRecommendationTask } = await import(
+                '../../data/repositories/recommendationRepository'
+              );
+              await deleteRecommendationTask(taskId);
+              toast('已删除');
+              await reload();
+            } catch (error) {
+              toast(`删除失败：${error instanceof Error ? error.message : String(error)}`);
+            }
+          })();
+        },
+      },
+    ]);
+  }
+
   function onPressGenerate() {
     if (!resolution) return;
     if (resolution.status === 'missing') {
@@ -297,6 +321,17 @@ export function RecommendationSheet({
       ))}
       {task && task.gaps.length > 0 ? <Notice>{`档案缺口：${task.gaps.join('；')}`}</Notice> : null}
       {task?.summary ? <Text style={styles.reason}>{task.summary}</Text> : null}
+      {task &&
+      (task.status === 'succeeded' ||
+        task.status === 'failed' ||
+        task.status === 'interrupted' ||
+        task.status === 'blocked') ? (
+        <Button
+          variant="text"
+          label="删除这条推荐记录"
+          onPress={() => confirmDelete(task.id)}
+        />
+      ) : null}
     </Sheet>
   );
 }

@@ -162,6 +162,12 @@ export async function getRecommendationTask(id: string): Promise<RecommendationT
   return row ? rowToTask(row) : null;
 }
 
+/** 删除一条推荐任务记录（用户明确要求删除；仅结果记录，不涉及文件） */
+export async function deleteRecommendationTask(taskId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM tasks WHERE id = ?', taskId);
+}
+
 /** 最近一次已完成的推荐任务（面板展示；新→旧） */
 export async function getLatestFinishedRecommendation(): Promise<RecommendationTask | null> {
   const db = await getDb();

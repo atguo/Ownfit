@@ -15,6 +15,7 @@ import {
   subscribePreviewChanges,
 } from '../previewStore';
 import {
+  deletePreviewTask,
   listRecentPreviewTasks,
   previewImageUri,
   type PreviewTask,
@@ -34,6 +35,18 @@ function formatLocal(iso: string): string {
   if (Number.isNaN(date.getTime())) return iso;
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** 终态任务可删除；queued/running 不提供（任务完成后自然可删） */
+function isDeletable(task: PreviewTask): boolean {
+  return (
+    task.status === 'succeeded' ||
+    task.status === 'failed' ||
+    task.status === 'interrupted' ||
+    task.status === 'blocked' ||
+    task.status === 'stale' ||
+    task.status === 'cancelled'
+  );
 }
 
 function statusLine(task: PreviewTask): string {
@@ -112,6 +125,27 @@ export function PreviewSheet({
         setStarting(false);
       }
     })();
+  }
+
+  function confirmDelete(taskId: string) {
+    Alert.alert('删除这条生成记录？', '生成图文件将一并删除，不可恢复。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await deletePreviewTask(taskId);
+              toast('已删除');
+              await reload();
+            } catch (error) {
+              toast(`删除失败：${error instanceof Error ? error.message : String(error)}`);
+            }
+          })();
+        },
+      },
+    ]);
   }
 
   function onPressGenerate() {
@@ -196,6 +230,14 @@ export function PreviewSheet({
                     void resolveImageGenForPreview().then(setResolution);
                   }
                 }}
+                style={styles.gap}
+              />
+            ) : null}
+            {isDeletable(task) ? (
+              <Button
+                variant="text"
+                label="删除"
+                onPress={() => confirmDelete(task.id)}
                 style={styles.gap}
               />
             ) : null}

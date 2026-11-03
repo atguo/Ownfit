@@ -385,3 +385,18 @@ export async function savePreviewResultImage(taskId: string, remoteUrl: string, 
 export function previewImageUri(relativePath: string): string {
   return `${Paths.document.uri}/${relativePath}`;
 }
+
+/**
+ * 删除一条预览任务记录与其生成图文件（用户明确要求删除；不可恢复）。
+ * 进行中（queued/running）的任务由调用方拦截，不在此处处理。
+ */
+export async function deletePreviewTask(taskId: string): Promise<void> {
+  const db = await getDb();
+  const task = await getPreviewTask(taskId);
+  if (!task) return;
+  await db.runAsync('DELETE FROM tasks WHERE id = ?', taskId);
+  if (task.resultPreviewPath) {
+    const file = new File(Paths.document, task.resultPreviewPath);
+    if (file.exists) file.delete();
+  }
+}
