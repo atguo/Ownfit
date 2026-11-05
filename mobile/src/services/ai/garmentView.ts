@@ -52,8 +52,7 @@ export function buildGarmentFeatureView(input: {
   category: string | null;
   colors: GarmentColorInput[];
   attributes: Array<{ name: string; value: string }>;
-}): GarmentFeatureView {
-  const main = input.colors.find((c) => c.isPrimary) ?? input.colors[0] ?? null;
+}): GarmentFeatureView {  const main = input.colors.find((c) => c.isPrimary) ?? input.colors[0] ?? null;
   const keyEntries: Array<{ name: string; text: string }> = [];
   const secondary: string[] = [];
 
@@ -94,4 +93,18 @@ export function featureViewToLine(view: GarmentFeatureView, options: { includeHe
   if (view.keyFeatures.length) parts.push(view.keyFeatures.join('，'));
   if (options.includeSecondary !== false && view.secondary.length) parts.push(`细节：${view.secondary.join('，')}`);
   return parts.join('；');
+}
+
+/** B2 预算压缩辅助（评估 §8.8）：按关键特征清单把属性拆成关键/次要两层——
+ * 推荐档案超字符预算时先去次要层（不丢单品身份），锁定单品与关键特征始终保留。 */
+export function splitAttributesByImportance(
+  attributes: Array<{ name: string; value: string }>,
+): { key: Array<{ name: string; value: string }>; secondary: Array<{ name: string; value: string }> } {
+  const key = attributes.filter((a) =>
+    (KEY_FEATURE_ORDER as readonly string[]).includes(a.name),
+  );
+  const secondary = attributes.filter(
+    (a) => !(KEY_FEATURE_ORDER as readonly string[]).includes(a.name),
+  );
+  return { key, secondary };
 }

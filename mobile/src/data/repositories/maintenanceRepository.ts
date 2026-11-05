@@ -32,6 +32,8 @@ export interface ConsistencyReport {
   orphanFiles: string[];
   /** 缩略图缺失但原件在（可重建），值为照片记录 id */
   rebuildableThumbs: string[];
+  /** previews/ 与 preview-ref/ 下无产物/参考引用的文件（评估 §8.8；活动写入保护见年龄阈值） */
+  previewOrphanFiles: string[];
 }
 
 function photosDir(): Directory {
@@ -40,6 +42,104 @@ function photosDir(): Directory {
 
 function thumbsDir(): Directory {
   return new Directory(Paths.document, 'thumbs');
+}
+
+function previewsDir(): Directory {
+  return new Directory(Paths.document, 'previews');
+}
+
+function previewRefDir(): Directory {
+  return new Directory(Paths.document, 'preview-ref');
+}
+
+/** 预览类文件的"活动写入保护"年龄：修改时间在该窗口内的文件视为可能在途写入，不清理 */
+const PREVIEW_FILE_MIN_AGE_MS = 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// 待清理记录（评估 §8.9：删除失败文件的最小持久化记录，仅类型/路径/重试状态）
+// ---------------------------------------------------------------------------
+
+export interface PendingCleanupRecord {
+  id: string;
+  kind: string;
+  path: string;
+  retryCount: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 登记一条删除失败的文件待清理（任何写文件联动处可调用；不抛出） */
+export async function recordPendingCleanup(kind: string, path: string, error?: string): Promise<void> {
+  try {
+    const db = await getDb();
+    const now = new Date().toISOString();
+    await db.runAsync(
+      `INSERT INTO pending_cleanup (id, kind, path, retry_count, last_error, created_at, updated_at)
+       VALUES (?, ?, ?, 0, ?, ?, ?)`,
+      `pc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      kind,
+      path,
+      error ?? null,
+      now,
+      now,
+    );
+  } catch {
+    // 记录失败不阻断主流程（文件清理是辅助动作）
+  }
+}
+
+/** 全部待清理记录（数据工具页展示） */
+export async function listPendingCleanup(): Promise<PendingCleanupRecord[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    id: string;
+    kind: string;
+    path: string;
+    retry_count: number;
+    last_error: string | null;
+    created_at: string;
+    updated_at: string;
+  }>('SELECT * FROM pending_cleanup ORDER BY created_at ASC');
+  return rows.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    path: row.path,
+    retryCount: row.retry_count,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+/** 重试待清理文件：删除成功即移除记录；失败递增计数并保留原因 */
+export async function retryPendingCleanup(): Promise<{ removed: string[]; failed: string[] }> {
+  const records = await listPendingCleanup();
+  const removed: string[] = [];
+  const failed: string[] = [];
+  const db = await getDb();
+  for (const record of records) {
+    try {
+      const file = new File(Paths.document, record.path);
+      if (!file.exists) {
+        await db.runAsync('DELETE FROM pending_cleanup WHERE id = ?', record.id);
+        removed.push(record.path);
+        continue;
+      }
+      file.delete();
+      await db.runAsync('DELETE FROM pending_cleanup WHERE id = ?', record.id);
+      removed.push(record.path);
+    } catch (error) {
+      failed.push(record.path);
+      await db.runAsync(
+        'UPDATE pending_cleanup SET retry_count = retry_count + 1, last_error = ?, updated_at = ? WHERE id = ?',
+        error instanceof Error ? error.message : String(error),
+        new Date().toISOString(),
+        record.id,
+      );
+    }
+  }
+  return { removed, failed };
 }
 
 /** 列出目录下的文件名（目录不存在视为空；只认文件，忽略子目录） */
@@ -99,25 +199,76 @@ export async function scanConsistency(): Promise<ConsistencyReport> {
     referenced.add(row.original_path);
     referenced.add(row.thumb_path);
   }
+  // 预览类引用：产物路径 + 人物参考记录 + 待清理记录（保护在途/失败重试中的文件）
+  const artifactRows = await db.getAllAsync<{ path: string }>('SELECT path FROM preview_artifacts');
+  for (const row of artifactRows) referenced.add(row.path);
+  const refRow = await db.getFirstAsync<{ value: string }>(
+    'SELECT value FROM preferences WHERE id = ?',
+    'preview-reference',
+  );
+  if (refRow?.value) {
+    try {
+      const parsed = JSON.parse(refRow.value) as { path?: string };
+      if (parsed?.path) referenced.add(parsed.path);
+    } catch {
+      // 记录损坏按无引用处理（文件成为孤儿候选，但仍有年龄保护）
+    }
+  }
+  const cleanupRows = await db.getAllAsync<{ path: string }>('SELECT path FROM pending_cleanup');
+  for (const row of cleanupRows) referenced.add(row.path);
+
+  const previewOrphanFiles = [
+    ...listFileNames(previewsDir()).map((name) => `previews/${name}`),
+    ...listFileNames(previewRefDir()).map((name) => `preview-ref/${name}`),
+  ].filter((path) => !referenced.has(path));
+
   const orphanFiles = [
     ...listFileNames(photosDir()).map((name) => `photos/${name}`),
     ...listFileNames(thumbsDir()).map((name) => `thumbs/${name}`),
   ].filter((path) => !referenced.has(path));
 
-  return { missingFiles, danglingMainRefs, orphanFiles, rebuildableThumbs };
+  return { missingFiles, danglingMainRefs, orphanFiles, rebuildableThumbs, previewOrphanFiles };
+}
+
+/** 文件是否足够"老"（活动写入保护）；修改时间未知时保守跳过 */
+function isOldEnoughForCleanup(file: File): boolean {
+  const modifiedAt = (file as unknown as { modificationTime?: number }).modificationTime;
+  if (typeof modifiedAt !== 'number' || !(modifiedAt > 0)) return false;
+  return Date.now() - modifiedAt > PREVIEW_FILE_MIN_AGE_MS;
 }
 
 /**
- * 清理孤儿文件：调用时重新扫描，只删除"无任何 photos 记录引用"的文件。
- * 返回实际删除的相对路径；不修改数据库记录（记录是事实，文件是资源）。
+ * 清理孤儿文件：调用时重新扫描，只删除"无任何记录引用"的文件。
+ * photos/thumbs 无记录引用即删；previews/preview-ref 额外要求"足够老"
+ * （修改时间在保护窗口内的可能是下载/纠偏在途产物，不清）。
+ * 返回实际删除的相对路径；删除失败登记 pending_cleanup。
  */
 export async function cleanOrphanFiles(): Promise<{ deleted: string[] }> {
-  const { orphanFiles } = await scanConsistency();
+  const { orphanFiles, previewOrphanFiles } = await scanConsistency();
+  const deleted: string[] = [];
   for (const path of orphanFiles) {
     const file = new File(Paths.document, path);
-    if (file.exists) file.delete();
+    if (file.exists) {
+      try {
+        file.delete();
+        deleted.push(path);
+      } catch (error) {
+        await recordPendingCleanup('photos', path, error instanceof Error ? error.message : String(error));
+      }
+    }
   }
-  return { deleted: orphanFiles };
+  for (const path of previewOrphanFiles) {
+    const file = new File(Paths.document, path);
+    if (!file.exists) continue;
+    if (!isOldEnoughForCleanup(file)) continue; // 活动写入保护
+    try {
+      file.delete();
+      deleted.push(path);
+    } catch (error) {
+      await recordPendingCleanup('previews', path, error instanceof Error ? error.message : String(error));
+    }
+  }
+  return { deleted };
 }
 
 /**

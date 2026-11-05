@@ -156,6 +156,7 @@ async function setup() {
   });
   const load = createLoader(adapter, fsStub, fetchImpl);
   const preview = load(path.join(SRC, 'data/repositories/previewRepository.ts'));
+  const postprocess = load(path.join(SRC, 'data/repositories/previewPostprocessRepository.ts'));
   const recommendation = load(path.join(SRC, 'data/repositories/recommendationRepository.ts'));
   const settings = load(path.join(SRC, 'data/repositories/settingsRepository.ts'));
   const runnerModule = load(path.join(SRC, 'services/ai/previewTaskRunner.ts'));
@@ -173,7 +174,7 @@ async function setup() {
     createdAt: 't',
     updatedAt: 't',
   };
-  return { db, adapter, close, fsStub, load, preview, recommendation, settings, runnerModule, config };
+  return { db, adapter, close, fsStub, load, preview, postprocess, recommendation, settings, runnerModule, config };
 }
 
 /** vm 上下文对象转普通对象，便于 deepEqual */
@@ -197,11 +198,18 @@ function baseCreateInput(over = {}) {
   };
 }
 
-/** C2/C8 执行器依赖桩：发送前复核放行、核对能力缺席（诚实未核对）、无待下载 */
-function driftCheckStubs() {
+/** C2/C8/§8.4 执行器依赖桩：发送前复核放行、核对能力缺席（诚实未核对）、条件提交走真实仓库 */
+function driftCheckStubs(ctx) {
   return {
     validateInput: async () => ({ ok: true }),
-    savePendingDownload: async () => {},
+    savePendingDownload: (taskId, url, prompt) => ctx.preview.savePendingDownload(taskId, url, prompt),
+    commitArtifact: (input) => ctx.preview.downloadAndCommitArtifact(input),
+    postprocess: {
+      claim: () => ctx.postprocess.claimNextPostProcess(),
+      updateStage: (id, allowedFrom, to, patch) => ctx.postprocess.updatePostProcessStage(id, allowedFrom, to, patch),
+      getArtifact: (artifactId) => ctx.preview.getPreviewArtifact(artifactId),
+      recoverInFlight: () => ctx.postprocess.recoverInFlightPostProcess(),
+    },
     getChecker: async () => ({ status: 'missing' }),
     loadCheckImages: async () => ({ garments: [], person: null, result: null }),
     runCheck: async () => ({ ok: false, kind: 'none', message: '未配置' }),
@@ -213,21 +221,46 @@ function configSnapshotValue() {
   return { id: 'cfg-img', name: 'MiniMax 图像', urlKind: 'minimax', baseUrl: 'https://api.example.com', modelId: 'image-01' };
 }
 
-test('删除：预览任务删除后记录与生成图一并清除；推荐记录删除仅删行', async () => {
+test('删除：预览任务删除后记录、产物与生成图一并清除；推荐记录删除仅删行', async () => {
   const ctx = await setup();
   try {
-    // 预览：创建 → running → 落盘 → succeeded → 删除 → 行与文件都消失
+    // 预览：创建 → running → 条件提交产物 → succeeded → 删除 → 行/产物/后处理/文件都消失
     const { taskId } = await ctx.preview.createPreviewTask(baseCreateInput());
     await ctx.preview.updatePreviewTaskStatus(taskId, ['queued'], 'running');
-    await ctx.preview.savePreviewResultImage(taskId, 'https://cdn.example.com/gen.jpg', '提示词');
+    const committed = await ctx.preview.downloadAndCommitArtifact({
+      taskId,
+      remoteUrl: 'https://cdn.example.com/gen.jpg',
+      prompt: '提示词',
+      inputKey: (await ctx.preview.getPreviewTask(taskId)).inputKey,
+      configId: 'cfg-img',
+      attempt: 0,
+      expectedStatus: ['running'],
+    });
+    assert.ok(committed.ok, '产物条件提交成功');
     await ctx.preview.updatePreviewTaskStatus(taskId, ['running'], 'succeeded');
     const before = await ctx.preview.getPreviewTask(taskId);
     assert.equal(before.status, 'succeeded');
     assert.ok(before.resultPreviewPath, '生成图路径已记录');
+    assert.equal(before.resultArtifactId, committed.artifact.artifactId, '产物指针已落库');
     assert.ok(ctx.fsStub.files.has(`file:///document/${before.resultPreviewPath}`), '生成图已落盘');
+    assert.equal(
+      ctx.db.prepare('SELECT COUNT(*) AS n FROM preview_postprocess WHERE task_id = ?').get(taskId).n,
+      1,
+      '后处理记录已入队',
+    );
 
     await ctx.preview.deletePreviewTask(taskId);
     assert.equal(await ctx.preview.getPreviewTask(taskId), null, '任务行已删除');
+    assert.equal(
+      ctx.db.prepare('SELECT COUNT(*) AS n FROM preview_artifacts WHERE task_id = ?').get(taskId).n,
+      0,
+      '产物行已删除',
+    );
+    assert.equal(
+      ctx.db.prepare('SELECT COUNT(*) AS n FROM preview_postprocess WHERE task_id = ?').get(taskId).n,
+      0,
+      '后处理行已删除',
+    );
     assert.equal(
       ctx.fsStub.files.has(`file:///document/${before.resultPreviewPath}`),
       false,
@@ -269,11 +302,12 @@ test('人物参考：保存后可读回（含版本），移除后文件与记�
       sourceWidth: 800,
       sourceHeight: 600,
     });
-    assert.equal(saved.path, 'preview-ref/reference.jpg');
+    // §8.8 文件保护：新保存使用唯一文件名（不再固定 reference.jpg）
+    assert.match(saved.path, /^preview-ref\/reference-[a-z0-9-]+\.jpg$/);
     assert.ok(saved.updatedAt, '参考版本时间写入记录');
 
     const read = await ctx.preview.getPreviewReference();
-    assert.equal(read.path, 'preview-ref/reference.jpg');
+    assert.equal(read.path, saved.path);
     assert.equal(read.updatedAt, saved.updatedAt);
     assert.equal(
       ctx.db.prepare("SELECT COUNT(*) AS n FROM preferences WHERE id = 'preview-reference'").get().n,
@@ -399,8 +433,7 @@ test('执行器：生成成功后落盘并标 succeeded；结果路径可读', a
         calls.push(input);
         return { ok: true, imageUrl: 'https://cdn.example.com/gen1.jpg' };
       },
-      saveResultImage: (id, url, prompt) => ctx.preview.savePreviewResultImage(id, url, prompt),
-      ...driftCheckStubs(),
+      ...driftCheckStubs(ctx),
     });
 
     runner.setForeground(true);
@@ -438,8 +471,7 @@ test('执行器：生成失败标 failed；结果未知（超时）标 interrupt
       readReferenceDataUrl: async () => ({ dataUrl: 'data:image/jpeg;base64,AAA', updatedAt: 'x' }),
       describeItems: async () => [],
       generate: async () => ({ ok: false, kind: 'auth', message: 'HTTP 401' }),
-      saveResultImage: async () => '',
-      ...driftCheckStubs(),
+      ...driftCheckStubs(ctx),
     });
     failRunner.setForeground(true);
     await waitFor(async () => (await ctx.preview.getPreviewTask(failedTask.taskId)).status === 'failed');
@@ -460,8 +492,7 @@ test('执行器：生成失败标 failed；结果未知（超时）标 interrupt
       readReferenceDataUrl: async () => ({ dataUrl: 'data:image/jpeg;base64,AAA', updatedAt: 'x' }),
       describeItems: async () => [],
       generate: async () => ({ ok: false, kind: 'timeout', message: '请求超时' }),
-      saveResultImage: async () => '',
-      ...driftCheckStubs(),
+      ...driftCheckStubs(ctx),
     });
     timeoutRunner.setForeground(true);
     await waitFor(async () => (await ctx.preview.getPreviewTask(timeoutTask.taskId)).status === 'interrupted');
@@ -490,8 +521,7 @@ test('执行器：人物参考缺失标 failed(reference_missing)，不发生成
         generated += 1;
         return { ok: true, imageUrl: 'https://cdn.example.com/x.jpg' };
       },
-      saveResultImage: async () => '',
-      ...driftCheckStubs(),
+      ...driftCheckStubs(ctx),
     });
     runner.setForeground(true);
     await waitFor(async () => (await ctx.preview.getPreviewTask(task.taskId)).status === 'failed');
@@ -524,8 +554,7 @@ test('执行器：启动恢复把遗留 running 标为 interrupted（不重发�
         generated += 1;
         return { ok: true, imageUrl: 'https://cdn.example.com/x.jpg' };
       },
-      saveResultImage: async () => '',
-      ...driftCheckStubs(),
+      ...driftCheckStubs(ctx),
     });
     await runner.recover();
     const recovered = await ctx.preview.getPreviewTask(task.taskId);

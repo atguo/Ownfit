@@ -55,6 +55,7 @@ function createFsStub(files = new Map()) {
 function createSecureStoreStub(initial = {}) {
   const store = new Map(Object.entries(initial));
   return {
+    store,
     WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'when-unlocked',
     async getItemAsync(key) {
       return store.has(key) ? store.get(key) : null;
@@ -160,7 +161,7 @@ test('v5/v6 迁移：tasks.input_json 列与 ai_configs 表存在；中途失败
 
     adapter.setFailOn(null);
     await runMigrations(adapter);
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 7);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8);
     assert.equal(
       db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'ai_configs'").get().n,
       1,
@@ -282,5 +283,118 @@ test('数据库不可用：ensureConfigCache 失败返回 false，镜像保持�
     assert.equal(configStore.getConfig('cfg-1'), undefined);
   } finally {
     close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// §8.8（2026-11-04）：独立迁移标记、共享初始化、密钥不原位覆盖
+// ---------------------------------------------------------------------------
+
+test('迁移标记：删空配置后重启不复活；残留旧文件不重导入', async () => {
+  // 场景一：标记已在（模拟第一次启动迁移完成）→ 配置删空后旧文件复活也不重导入
+  const second = await setup({ jsonConfigs: [sampleConfig({ name: '复活源' })] });
+  try {
+    // 预置标记（模拟第一次启动已迁移完成）
+    second.db
+      .prepare("INSERT INTO preferences (id, value, source, created_at, updated_at) VALUES ('ai-configs-migrated-v6', 'done', 'system', 't', 't')")
+      .run();
+    const loaded = await second.configStore.ensureConfigCache();
+    assert.equal(loaded, true);
+    assert.equal(second.configStore.getConfig('cfg-1'), undefined, '标记完成：删空配置不复活');
+    assert.equal(second.fileSystem.files.has(CONFIG_PATH), false, '残留旧文件仅清理不再作为来源');
+  } finally {
+    second.close();
+  }
+});
+
+test('损坏旧 JSON：保留文件、不写标记、登记问题（不当"无配置"静默处理）', async () => {
+  const ctx = await setup({ raw: '{not-json' });
+  try {
+    const loaded = await ctx.configStore.ensureConfigCache();
+    assert.equal(loaded, true);
+    assert.equal(ctx.configStore.getConfig('cfg-1'), undefined);
+    assert.equal(
+      ctx.db.prepare("SELECT COUNT(*) AS n FROM preferences WHERE id = 'ai-configs-migrated-v6'").get().n,
+      0,
+      '损坏文件不得写成功标记',
+    );
+    assert.equal(ctx.fileSystem.files.has(CONFIG_PATH), true, '损坏原文件保留');
+    assert.match(ctx.configStore.getLegacyMigrationProblem() ?? '', /无法解析|不是有效/);
+  } finally {
+    ctx.close();
+  }
+});
+
+test('并发初始化仅一次：共享同一 Promise，迁移与加载不重复执行', async () => {
+  const ctx = await setup({ jsonConfigs: [sampleConfig()] });
+  try {
+    const selects = [];
+    const orig = ctx.adapter.getAllAsync.bind(ctx.adapter);
+    ctx.adapter.getAllAsync = async (sql, ...args) => {
+      if (String(sql).includes('FROM ai_configs')) selects.push(String(sql));
+      return orig(sql, ...args);
+    };
+    const [a, b] = await Promise.all([ctx.configStore.ensureConfigCache(), ctx.configStore.ensureConfigCache()]);
+    assert.equal(a, true);
+    assert.equal(b, true);
+    assert.equal(selects.length, 1, '并发调用共享同一次加载');
+    assert.equal(ctx.configStore.getConfig('cfg-1')?.id, 'cfg-1');
+  } finally {
+    ctx.close();
+  }
+});
+
+test('密钥换绑（§8.8）：新 keyRef 先行，DB 成功后清旧凭证；DB 失败删新凭证保旧配置', async () => {
+  const ctx = await setup({ jsonConfigs: [] });
+  try {
+    const created = await ctx.configStore.addConfig({
+      name: 'GLM',
+      urlKind: 'openai',
+      baseUrl: 'https://api.example.com/v1',
+      modelId: 'glm-4v',
+      capabilities: ['vision'],
+      apiKey: 'sk-old',
+    });
+    const oldKeyRef = created.keyRef;
+
+    // 正常换 Key：新 keyRef 生效、旧凭证清除
+    const updated = await ctx.configStore.updateConfig(created.id, {
+      name: 'GLM',
+      urlKind: 'openai',
+      baseUrl: 'https://api.example.com/v1',
+      modelId: 'glm-4v',
+      capabilities: ['vision'],
+      apiKey: 'sk-new',
+    });
+    assert.notEqual(updated.keyRef, oldKeyRef, '不原位覆盖旧 keyRef');
+    assert.equal(await ctx.secureStore.getItemAsync(updated.keyRef), 'sk-new');
+    assert.equal(await ctx.secureStore.getItemAsync(oldKeyRef), null, 'DB 提交后清旧凭证');
+    assert.notEqual(updated.callRevision, created.callRevision, '换 Key 属调用变化');
+
+    // DB 失败：新凭证被删、旧引用与配置保持可用（注入：ai_configs 的 UPSERT 失败）
+    const before = ctx.configStore.getConfig(created.id);
+    const origRun = ctx.adapter.runAsync.bind(ctx.adapter);
+    ctx.adapter.runAsync = async (sql, ...args) => {
+      if (String(sql).includes('INSERT INTO ai_configs')) throw new Error('injected db failure');
+      return origRun(sql, ...args);
+    };
+    await assert.rejects(
+      ctx.configStore.updateConfig(created.id, {
+        name: 'GLM',
+        urlKind: 'openai',
+        baseUrl: 'https://api.example.com/v1',
+        modelId: 'glm-4v',
+        capabilities: ['vision'],
+        apiKey: 'sk-fail',
+      }),
+    );
+    ctx.adapter.runAsync = origRun;
+    const after = ctx.configStore.getConfig(created.id);
+    assert.equal(after.keyRef, before.keyRef, 'DB 失败不得改动生效引用');
+    assert.equal(await ctx.secureStore.getItemAsync(after.keyRef), 'sk-new', '旧凭证仍可用');
+    const leaked = [...ctx.secureStore.store.entries()].find(([k, v]) => k !== after.keyRef && v === 'sk-fail');
+    assert.equal(leaked, undefined, 'DB 失败时新凭证已被删除');
+  } finally {
+    ctx.close();
   }
 });

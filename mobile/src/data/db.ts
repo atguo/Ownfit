@@ -273,6 +273,65 @@ async function migrateToV7(db: SQLite.SQLiteDatabase): Promise<void> {
 }
 
 /**
+ * schema v8（全部计划评估 §8.4/§8.5/§8.9，2026-11-04）：
+ * 预览产物不可变化与后处理生命周期：
+ * - tasks.result_artifact_id：当前选中产物指针（每个产物不可变，只有指针可变；条件提交用 CAS）
+ * - preview_artifacts：每次实际图像（路径/实际 prompt/输入指纹/配置/尝试序号），
+ *   纠偏形成新产物，原产物与判定保留
+ * - preview_postprocess：生成后的核对/纠偏阶段（queued/checking/correcting/checked/
+ *   unchecked/unknown/interrupted）与纠偏预算，不再使用脱离生命周期的 void 异步核对
+ * - preview_checks.artifact_id：核对记录关联具体产物（可空，旧记录兼容）
+ * - preview_comparisons.artifact_a_id/artifact_b_id/conditions_json：比较绑定不可变产物
+ *   并保存共同条件快照（旧比较组无产物绑定，按 legacy 处理）
+ * - pending_cleanup：删除失败文件的最小清理记录（仅类型/路径/重试状态，无密钥内容）
+ */
+async function migrateToV8(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await db.execAsync('ALTER TABLE tasks ADD COLUMN result_artifact_id TEXT');
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS preview_artifacts (
+          id TEXT PRIMARY KEY NOT NULL,
+          task_id TEXT NOT NULL,
+          attempt INTEGER NOT NULL DEFAULT 0,
+          path TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          input_key TEXT NOT NULL,
+          config_id TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_preview_artifacts_task ON preview_artifacts(task_id);
+        CREATE TABLE IF NOT EXISTS preview_postprocess (
+          id TEXT PRIMARY KEY NOT NULL,
+          task_id TEXT NOT NULL,
+          artifact_id TEXT NOT NULL,
+          stage TEXT NOT NULL,
+          attempt INTEGER NOT NULL DEFAULT 0,
+          execution TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_preview_postprocess_task ON preview_postprocess(task_id);
+        CREATE INDEX IF NOT EXISTS idx_preview_postprocess_stage ON preview_postprocess(stage);
+        ALTER TABLE preview_checks ADD COLUMN artifact_id TEXT;
+        ALTER TABLE preview_comparisons ADD COLUMN artifact_a_id TEXT;
+        ALTER TABLE preview_comparisons ADD COLUMN artifact_b_id TEXT;
+        ALTER TABLE preview_comparisons ADD COLUMN conditions_json TEXT;
+        CREATE TABLE IF NOT EXISTS pending_cleanup (
+          id TEXT PRIMARY KEY NOT NULL,
+          kind TEXT NOT NULL,
+          path TEXT NOT NULL,
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    await db.execAsync('PRAGMA user_version = 8');
+  });
+}
+
+/**
  * 各版本迁移步骤（顺序执行，每步把库推进到对应 user_version）。
  * 导出用于测试：测试必须调用这里的生产迁移步骤构造 v1/v2 库，
  * 不能在测试里另复制一套建表 SQL（分批执行手册 P2）。
@@ -288,6 +347,7 @@ export const schemaMigrations: ReadonlyArray<{
   { version: 5, up: migrateToV5 },
   { version: 6, up: migrateToV6 },
   { version: 7, up: migrateToV7 },
+  { version: 8, up: migrateToV8 },
 ];
 
 /**

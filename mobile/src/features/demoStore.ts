@@ -18,6 +18,13 @@ export interface DemoContext {
   tempSource: 'demo' | 'real' | 'manual';
   /** 实时天气的获取时间（ISO，本地展示）；仅 tempSource='real' 时有值（M6 批次 1.3） */
   weatherFetchedAt?: string;
+  /** F4：实时天气归属的目标日期（本地 yyyy-MM-dd）——跨日即失效，不让"今天"被重新解释 */
+  weatherTargetDate?: string;
+  /** F4：实时天气归属地点（城市名）——与当次地点不一致即失效 */
+  weatherPlace?: string;
+  /** F4：当次条件版本。用户改动地点/日期/手动温度时递增；自动写回只有在请求期间
+   * 版本未变才生效（迟到响应不得覆盖用户改动；定位/天气的内部更新不递增版本） */
+  conditionRevision: number;
 }
 
 export interface DemoState {
@@ -31,7 +38,14 @@ export interface DemoState {
 export const DEMO_WEATHER = { temp: '18–24℃', weatherDesc: '晴间多云（演示）' } as const;
 
 const initial: DemoState = {
-  context: { city: '杭州', day: '今天', scene: '日常通勤', ...DEMO_WEATHER, tempSource: 'demo' },
+  context: {
+    city: '杭州',
+    day: '今天',
+    scene: '日常通勤',
+    ...DEMO_WEATHER,
+    tempSource: 'demo',
+    conditionRevision: 0,
+  },
   newUser: false,
   reference: false,
   prefs: [],
@@ -56,8 +70,16 @@ export function useDemoStore(): DemoState {
   return useSyncExternalStore(subscribe, () => state);
 }
 
-export function setContext(change: Partial<DemoContext>) {
-  set({ context: { ...state.context, ...change } });
+/**
+ * 当次 context 更新（F4，评估 §8.6）：默认视为用户改动（地点/日期/手动温度等），
+ * 递增 conditionRevision 使在途天气请求的写回失效；
+ * 定位/天气编排的内部更新传 { internal: true }，不递增版本（不得让自己误触发失效）。
+ */
+export function setContext(change: Partial<DemoContext>, options: { internal?: boolean } = {}) {
+  const revision = options.internal
+    ? state.context.conditionRevision
+    : state.context.conditionRevision + 1;
+  set({ context: { ...state.context, ...change, conditionRevision: revision } });
 }
 
 /** 当次场景快照（保存方案时写入 scene 字段；当次调整不写回长期默认） */

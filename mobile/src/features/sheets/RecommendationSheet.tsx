@@ -12,6 +12,7 @@ import { Field, TextField } from '../../ui/components/Field';
 import { useToast } from '../../ui/components/Toast';
 import {
   enqueueRecommendation,
+  evaluateAdoption,
   getItemAvailability,
   hasActiveRecommendation,
   loadLatestRecommendation,
@@ -20,9 +21,11 @@ import {
   rememberDefaultRecommendationConfig,
   resolveTextForRecommendation,
   subscribeRecommendationChanges,
+  verifySnapshotRevisions,
 } from '../recommendationStore';
-import { getOutfitSession, loadOutfitFrom, slotForCategory } from '../outfitSession';
+import { getOutfitSession, loadOutfitFrom, replaceSlot, slotForCategory, type OutfitSlot } from '../outfitSession';
 import { checkGarmentEvidence } from '../../services/ai/evidenceCheck';
+import { parseRecommendationInputV2 } from '../../services/ai/recommendationInput';
 import type { WearStyle } from '@ownfit/contract';
 import { getItem } from '../../data/repositories/itemRepository';
 import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
@@ -110,7 +113,23 @@ export function RecommendationSheet({
         // 当前搭配会话有锁定单品时带入推荐（模型围绕锁定项组合；入队快照持久化）
         const session = getOutfitSession();
         const lockedItemIds = session.active && session.locks.length > 0 ? session.locks : undefined;
-        const result = await enqueueRecommendation({ scene, configId, lockedItemIds, note });
+        // S1：入队记录组合基线（采用时复核会话是否已变化，不把旧候选覆盖新编辑）
+        const baseline = session.active
+          ? {
+              slots: Object.fromEntries(
+                (Object.entries(session.slots) as [string, string][]).filter(([, id]) => !!id),
+              ),
+              wear: session.wear,
+              slotWear: Object.fromEntries(
+                (Object.entries(session.slotWear) as [string, string][]).filter(([, style]) => !!style),
+              ),
+            }
+          : undefined;
+        const result = await enqueueRecommendation({ scene, configId, lockedItemIds, note, baseline });
+        if (result.status === 'rejected') {
+          Alert.alert('这次没有发起推荐', result.message, [{ text: '知道了' }]);
+          return;
+        }
         toast(result.status === 'created' ? 'AI 正在为你搭配…' : '同样的推荐已在进行中');
         await reload();
       } finally {
@@ -161,8 +180,9 @@ export function RecommendationSheet({
     start(resolution.config.id);
   }
 
-  /** 采用候选：复核可用性 → 槽位按品类映射（B3/R2：外套独立槽位，不再并入上衣丢件）→
-   * 校验锁定覆盖与槽位冲突 → 保留锁定集合进入搭配编辑（R3） */
+  /** 采用候选（S1，评估 §8.2.6）：可用性与品类映射复核 → 读取任务快照做采用决策 →
+   * 整套采用（保留原请求锁定）或局部替换（会话单次变更，保留其他件/穿法/撤销）。
+   * 会话基线/锁定已变化时停止采用并提示重新推荐，不把旧候选覆盖新编辑。 */
   async function adopt(candidate: RecommendationCandidate) {
     const session = getOutfitSession();
     const slots: Partial<Record<'top' | 'dress' | 'bottom' | 'shoes' | 'outer', string>> = {};
@@ -193,18 +213,54 @@ export function RecommendationSheet({
       Alert.alert('候选组合冲突', '连衣裙与上衣/下装不能同时出现，已拒绝采用。请换一个候选。');
       return;
     }
-    // R3：请求时锁定的单品若在候选内则保持锁定（basis 默认锁定）
-    const keptLocks = session.active ? session.locks.filter((id) => adoptedIds.includes(id)) : [];
+    // 候选单品的资料版本仍与请求一致（等待期间被改过 → 提示重新推荐）
+    const stored = parseRecommendationInputV2(task?.inputJson ?? null);
+    if (stored) {
+      const revisions = await verifySnapshotRevisions(stored, adoptedIds);
+      if (!revisions.ok) {
+        Alert.alert('结果已过期', revisions.message, [{ text: '知道了' }]);
+        return;
+      }
+    }
+    const decision = evaluateAdoption({
+      stored,
+      candidate,
+      mappedSlots: slots,
+      session: session.active
+        ? {
+            active: true,
+            slots: session.slots,
+            locks: session.locks,
+            wear: session.wear,
+            slotWear: session.slotWear,
+          }
+        : null,
+    });
+    if (decision.action === 'blocked') {
+      Alert.alert('无法直接采用', decision.message, [{ text: '知道了' }]);
+      return;
+    }
+    if (decision.action === 'replace_slot') {
+      const applied = replaceSlot(decision.slot as OutfitSlot, decision.itemId);
+      if (applied === 'locked') {
+        Alert.alert('目标单品已锁定', '先解锁这一件，再采用替换建议。', [{ text: '知道了' }]);
+        return;
+      }
+      toast('已按推荐替换这一件（其他单品与穿法保持不变）');
+      onClose();
+      return;
+    }
     loadOutfitFrom({
       planId: '',
       name: null,
-      basisId: candidate.slots[0]?.itemId ?? '',
-      slots,
-      wear: candidate.wearStyle as WearStyle,
-      itemIds: candidate.slots.map((slot) => slot.itemId),
+      basisId: decision.basisId,
+      slots: decision.slots as Partial<Record<'top' | 'dress' | 'bottom' | 'shoes' | 'outer', string>>,
+      wear: decision.wear as WearStyle,
+      itemIds: decision.itemIds,
       // 保存时保留 AI 来源与理由（M6 批次 1.2：不再固定 manual/null）
-      origin: { source: 'ai', reason: candidate.reason ?? null },
-      locks: keptLocks,
+      origin: { source: 'ai', reason: decision.reason },
+      // R3/S1：整套采用保留原请求锁定（来自快照，不是此刻 session）
+      locks: decision.locks,
     });
     onClose();
     router.push('/outfit');

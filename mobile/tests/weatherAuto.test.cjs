@@ -18,9 +18,12 @@ function createDemoStub(initial) {
   return {
     stub: {
       getContextSnapshot: () => ({ ...ctx }),
-      setContext(change) {
-        ctx = { ...ctx, ...change };
-        setCalls.push({ ...change });
+      // 与生产 demoStore 同语义：用户改动递增 conditionRevision；internal（自动编排）不递增
+      setContext(change, options = {}) {
+        const base = ctx.conditionRevision ?? 0;
+        const revision = options.internal ? base : base + 1;
+        ctx = { ...ctx, ...change, conditionRevision: revision };
+        setCalls.push({ ...change, internal: !!options.internal });
       },
     },
     ctx: () => ({ ...ctx }),
@@ -224,4 +227,124 @@ test('R6：过期实时天气刷新失败 → 降级占位，不继续标 real',
   const ctx = demo.ctx();
   assert.equal(ctx.city, '杭州市');
   assert.equal(ctx.tempSource, 'demo', '过期且刷新失败不得保持 real 来源');
+});
+
+// ---------------------------------------------------------------------------
+// F4（2026-11-04，评估 §8.6）：天气按目标日期与请求版本条件写回
+// ---------------------------------------------------------------------------
+
+/** F4 专用 harness：定位即时返回；defer=true 时天气请求由测试手动放行（可控 Promise），
+ * 否则立即返回（用 weatherCalls 区分第几次请求） */
+function f4Harness({ initialContext, defer = false } = {}) {
+  const counts = { locateCalls: 0, weatherCalls: 0 };
+  const place = { label: '杭州市', lat: 30.1235, lon: 120.6543, resolved: true };
+  const locateImpl = async () => {
+    counts.locateCalls += 1;
+    return { ok: true, place };
+  };
+  let releaseWeather = null;
+  const weatherImpl = async () => {
+    counts.weatherCalls += 1;
+    const index = counts.weatherCalls;
+    if (defer) {
+      await new Promise((resolve) => {
+        releaseWeather = resolve;
+      });
+    }
+    return {
+      ok: true,
+      snapshot: {
+        tempRange: `1${index}–19℃`,
+        minC: 10,
+        maxC: 19,
+        description: index === 1 ? '第一请求' : '第二请求',
+        weatherCode: 2,
+        fetchedAt: new Date().toISOString(),
+      },
+    };
+  };
+  const demo = createDemoStub(
+    initialContext ?? {
+      city: '北京', day: '今天', scene: '日常通勤', temp: '18–24℃',
+      weatherDesc: '晴间多云（演示）', tempSource: 'demo',
+    },
+  );
+  const auto = loadAuto({ locate: locateImpl, weather: weatherImpl, demo: demo.stub });
+  return {
+    auto,
+    demo,
+    counts,
+    release: () => releaseWeather?.(),
+  };
+}
+
+test('F4：成功写回绑定目标日期与归属地点，且为内部更新（不递增条件版本）', async () => {
+  const { auto, demo } = f4Harness();
+  const revisionBefore = demo.ctx().conditionRevision ?? 0;
+  const result = await auto.refreshCurrentWeather({ force: true });
+  assert.equal(result.ran, true);
+  const ctx = demo.ctx();
+  assert.equal(ctx.tempSource, 'real');
+  assert.equal(ctx.weatherPlace, '杭州市');
+  assert.match(ctx.weatherTargetDate, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(ctx.conditionRevision, revisionBefore, '自动写回不得递增条件版本');
+});
+
+test('F4：请求期间切到「明天」→ 迟到响应整体丢弃，不写温度也不改城市', async () => {
+  const { auto, demo, release } = f4Harness({ defer: true });
+  const pending = auto.refreshCurrentWeather({ force: true });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  // 用户操作：切到明天（版本递增）
+  demo.stub.setContext({ day: '明天' });
+  release();
+  const result = await pending;
+  const ctx = demo.ctx();
+  assert.equal(ctx.day, '明天');
+  assert.equal(ctx.city, '北京', '旧请求不得改写用户已改的城市/日期');
+  assert.equal(ctx.tempSource, 'demo', '今日预报不得在切到明天后写入');
+  assert.match(result.weatherMessage, /没有写入/);
+});
+
+test('F4：请求期间手动改城市 → 迟到响应作废，用户条件优先', async () => {
+  const { auto, demo, release } = f4Harness({ defer: true });
+  const pending = auto.refreshCurrentWeather({ force: true });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  demo.stub.setContext({ city: '广州', temp: '25℃', tempSource: 'manual' });
+  release();
+  await pending;
+  const ctx = demo.ctx();
+  assert.equal(ctx.city, '广州', '用户手动城市必须优先');
+  assert.equal(ctx.tempSource, 'manual', '手动值不得被迟到的自动结果覆盖');
+  assert.equal(ctx.weatherPlace, undefined, '自动结果未写入（weatherPlace 不出现）');
+});
+
+test('F4：目标日期为昨天（跨日）的实时天气 → 节流失效，重新查询', async () => {
+  const { auto, counts } = f4Harness({
+    initialContext: {
+      city: '上海市', day: '今天', scene: '通勤', temp: '10–15℃',
+      weatherDesc: '小雨', tempSource: 'real', weatherFetchedAt: new Date().toISOString(),
+      weatherTargetDate: '2026-11-03', weatherPlace: '上海市', conditionRevision: 0,
+    },
+  });
+  const result = await auto.refreshCurrentWeather();
+  assert.equal(result.ran, true, '跨日的实时天气按目标日期判定过期');
+  assert.equal(counts.locateCalls, 1);
+});
+
+test('F4：在途请求期间 force → 排跟进执行，最终结果来自最新条件', async () => {
+  const { auto, demo, counts, release } = f4Harness({ defer: true });
+  const first = auto.refreshCurrentWeather({ force: true });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const second = auto.refreshCurrentWeather({ force: true }); // force：不与在途共享
+  release(); // 放行第一请求
+  const firstResult = await first;
+  assert.equal(firstResult.ran, true);
+  await new Promise((resolve) => setTimeout(resolve, 10)); // 跟进执行发起第二请求
+  release(); // 放行第二请求
+  const secondResult = await second;
+  assert.equal(secondResult.ran, true);
+  assert.equal(counts.locateCalls, 2, 'force 在途触发跟进执行');
+  const ctx = demo.ctx();
+  assert.equal(ctx.weatherDesc, '第二请求', '最终 context 来自最新一次执行');
+  assert.equal(ctx.city, '杭州市');
 });

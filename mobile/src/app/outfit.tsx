@@ -12,6 +12,7 @@ import { Alert } from 'react-native';
 import { PreviewSheet } from '../features/sheets/PreviewSheet';
 import { RecommendationSheet } from '../features/sheets/RecommendationSheet';
 import { WearSheet } from '../features/sheets/WearSheet';
+import { ColorHintSheet } from '../features/sheets/ColorHintSheet';
 import { SlotReplaceSheet } from '../features/sheets/SlotReplaceSheet';
 import {
   enqueueRecommendation,
@@ -20,6 +21,7 @@ import {
 } from '../features/recommendationStore';
 import {
   buildContractPlan,
+  effectiveSlotWear,
   getOutfitSession,
   missingSlots,
   outfitHistoryLength,
@@ -57,6 +59,7 @@ export default function OutfitScreen() {
   const session = useOutfitSession();
   const [slotViews, setSlotViews] = useState<Record<string, SlotView>>({});
   const [wearOpen, setWearOpen] = useState(false);
+  const [colorOpen, setColorOpen] = useState(false);
   const [replaceSlotOpen, setReplaceSlotOpen] = useState<OutfitSlot | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [recommendOpen, setRecommendOpen] = useState(false);
@@ -112,8 +115,9 @@ export default function OutfitScreen() {
     })();
   }
 
-  /** B5（决策 D-6）：AI 推荐某一槽位的替代——其余槽位全部随请求锁定、只换该槽位；
-   * 走与整 request 相同的推荐任务链路，候选仍需复核后采用。 */
+  /** B5/F8（评估 §8.2.4）：AI 推荐某一槽位的替代——请求记录目标槽位与组合基线（真实 ID），
+   * 其余槽位随请求锁定；候选在执行端按"只允许目标槽位变化"本地校验，
+   * 采用走会话的单次替换（保留其他件/逐件穿法/撤销）。 */
   async function aiSwapSlot(slot: OutfitSlot) {
     const resolution = await resolveTextForRecommendation();
     if (resolution.status !== 'ready') {
@@ -124,9 +128,10 @@ export default function OutfitScreen() {
       );
       return;
     }
+    const sessionNow = getOutfitSession();
     const otherItems = presentSlots
       .filter((s) => s !== slot)
-      .map((s) => session.slots[s] as string)
+      .map((s) => sessionNow.slots[s] as string)
       .filter(Boolean);
     const lockedItemIds = [...new Set(otherItems)];
     if (lockedItemIds.length === 0) {
@@ -141,7 +146,21 @@ export default function OutfitScreen() {
       configId: resolution.config.id,
       lockedItemIds,
       note: `只换${slotLabels[slot]}，其他单品保持不变`,
+      baseline: {
+        slots: Object.fromEntries(
+          (Object.entries(sessionNow.slots) as [string, string][]).filter(([, id]) => !!id),
+        ),
+        wear: sessionNow.wear,
+        slotWear: Object.fromEntries(
+          (Object.entries(sessionNow.slotWear) as [string, string][]).filter(([, style]) => !!style),
+        ),
+      },
+      targetSlot: slot,
     });
+    if (result.status === 'rejected') {
+      Alert.alert('这次没有发起推荐', result.message, [{ text: '知道了' }]);
+      return;
+    }
     toast(result.status === 'created' ? 'AI 正在推荐替代（其他件保持不变）…' : '同样的推荐已在进行中');
   }
 
@@ -230,7 +249,14 @@ export default function OutfitScreen() {
 
       <View style={styles.wearing}>
         <Text style={styles.wearingText}>穿法 · {session.wear}</Text>
-        <Button variant="text" label="调整穿法" onPress={() => setWearOpen(true)} />
+        <View style={styles.wearingButtons}>
+          <Button
+            variant="text"
+            label={session.colorHints.length ? `选配色 · ${session.colorHints.join('、')}` : '选配色'}
+            onPress={() => setColorOpen(true)}
+          />
+          <Button variant="text" label="调整穿法" onPress={() => setWearOpen(true)} />
+        </View>
       </View>
 
       <View style={styles.actions}>
@@ -250,6 +276,7 @@ export default function OutfitScreen() {
       <Text style={styles.underNote}>上身预览为 AI 生成示意图，非真实试穿</Text>
 
       <WearSheet visible={wearOpen} onClose={() => setWearOpen(false)} />
+      <ColorHintSheet visible={colorOpen} onClose={() => setColorOpen(false)} />
       <SlotReplaceSheet
         slot={replaceSlotOpen}
         currentItemId={replaceSlotOpen ? session.slots[replaceSlotOpen] ?? null : null}
@@ -269,9 +296,14 @@ export default function OutfitScreen() {
         basisItemId={session.basisId ?? ''}
         itemIds={presentSlots.flatMap((slot) => (session.slots[slot] ? [session.slots[slot] as string] : []))}
         wearStyle={session.wear}
-        // C4：逐件穿法随输入版本进快照（外套敞开/内搭前塞可同时表达）
+        // C4/F3：有效逐件穿法（§8.3.1 单一出处）随输入版本进快照、指纹与核对约束
         itemWear={Object.fromEntries(
-          Object.entries(session.slotWear).map(([slot, style]) => [session.slots[slot as OutfitSlot] as string, style]),
+          presentSlots
+            .filter((slot) => session.slots[slot])
+            .map((slot) => [
+              session.slots[slot] as string,
+              effectiveSlotWear(slot, session.slotWear[slot], session.wear),
+            ]),
         )}
       />
     </Page>
@@ -340,6 +372,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 12,
+  },
+  wearingButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 1,
   },
   wearingText: {
     fontSize: 11,

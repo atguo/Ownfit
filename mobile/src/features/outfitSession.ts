@@ -64,6 +64,9 @@ export interface OutfitSessionState {
   wear: WearStyle;
   /** 逐件穿法（C4）：按槽位覆盖顶层 wear；无外套时与顶层一致 */
   slotWear: Partial<Record<OutfitSlot, WearStyle>>;
+  /** 选配色软提示（评估 §8.8，2026-11-04）：来自颜色库的本次挑选，仅会话内参考，
+   * 不参与撤销栈、不发送给 AI、不设为长期偏好；新会话开始时清空 */
+  colorHints: string[];
   parentPlanId: string | null;
   parentLabel: string | null;
   parentItemIds: string[];
@@ -86,6 +89,7 @@ let state: SessionState = {
   locks: [],
   wear: '自然垂放',
   slotWear: {},
+  colorHints: [],
   parentPlanId: null,
   parentLabel: null,
   parentItemIds: [],
@@ -184,6 +188,22 @@ export function setSlotWear(slot: OutfitSlot, style: WearStyle) {
   });
 }
 
+/**
+ * 有效逐件穿法（评估 §8.3.1，单一出处）：内搭/连衣裙取本件覆盖或主穿法；
+ * 外套取本件设置或自然垂放（省略"自然垂放"不再与全局穿法产生歧义）；
+ * 鞋履不继承塞衣角等不适用穿法。UI、保存、生成、核对都消费这一份结果。
+ */
+export function effectiveSlotWear(slot: OutfitSlot, override: WearStyle | undefined, mainWear: WearStyle): WearStyle {
+  if (slot === 'shoes') return '自然垂放';
+  if (slot === 'outer') return override ?? '自然垂放';
+  return override ?? mainWear;
+}
+
+/** 选配色软提示（会话内参考；不参与撤销、不发送给 AI、新会话清空） */
+export function setColorHints(colors: string[]) {
+  set({ colorHints: [...new Set(colors)].slice(0, 8) });
+}
+
 /** 缺失的必需槽位（组合完整性检查；缺口显式表达，不虚构完整组合） */
 export function missingSlots(slots: Partial<Record<OutfitSlot, string>>): OutfitSlot[] {
   let best: OutfitSlot[] = REQUIRED_SLOTS[0];
@@ -238,6 +258,8 @@ export async function startOutfitFrom(basisId: string): Promise<boolean> {
     slots,
     locks: [basisId],
     wear: '自然垂放',
+    slotWear: {},
+    colorHints: [], // 新会话清空选配色软提示
     parentPlanId: null,
     parentLabel: null,
     parentItemIds: [],
@@ -275,6 +297,7 @@ export function loadOutfitFrom(input: {
     locks: input.locks?.length ? [...new Set([input.basisId, ...input.locks])] : [input.basisId],
     wear: input.wear,
     slotWear: input.slotWear ? { ...input.slotWear } : {},
+    colorHints: [], // 新会话清空选配色软提示
     parentPlanId: input.planId,
     parentLabel: input.name,
     parentItemIds: [...input.itemIds],

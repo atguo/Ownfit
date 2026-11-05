@@ -2,20 +2,30 @@
 // 与 previewTaskRunner 相同的状态机语义：发送前写 running、启动恢复标 interrupted、
 // 异常兜底不留 running、执行级看门狗保证任务必达终态。
 // 生成 = OpenAI 兼容 chatCompletion（文本模型），无下载步骤。
+// S1（2026-11-04，评估 §8.2）：执行只依据入队快照（RecommendationInputV2）——
+// 不再按当前衣橱重建别名映射（旧 R4 漂移根因）；发送前校验快照内单品可用性与
+// 资料版本，不满足标 stale 并保留原请求；局部替换候选按允许变化范围本地校验（F8）。
+// 历史兼容：无 V2 快照的旧 queued 请求标 stale（不自动重发）；旧 running 由启动恢复标 interrupted。
 
 import { getConfig, getApiKey } from './configStore';
 import { callRevisionOf, type ModelConfig } from './types';
 import { chatCompletion } from './openaiClient';
 import {
-  buildRecommendationInputKey,
+  categoryToSlotRole,
   normalizeRecommendation,
   parseRecommendationContent,
   recommendationSystemPrompt,
   recommendationUserPrompt,
   RECOMMENDATION_PROMPT_VERSION,
   type ProfileItem,
-  type RecommendationCandidate,
+  type SlotRole,
 } from './recommendationService';
+import {
+  aliasMapOf,
+  parseRecommendationInputV2,
+  type RecommendationInputV2,
+  type ReplacementRule,
+} from './recommendationInput';
 import {
   commitRecommendationResult,
   getRecommendationTask,
@@ -38,28 +48,14 @@ export interface RecommendationRunnerDeps {
   ): Promise<boolean>;
   getConfig(id: string): ModelConfig | undefined;
   getApiKey(keyRef: string): Promise<string | null>;
-  /** 读取当前衣物档案（已入库单品，别名 → 真实 id 映射一并返回）。
-   * lockedAliases：请求锁定的别名（B2 预算超限时优先送入）；truncated=本次未送入全部档案。 */
-  loadProfile(lockedAliases?: string[]): Promise<{
-    items: ProfileItem[];
-    idByAlias: Map<string, string>;
-    truncated?: boolean;
-    sentCount?: number;
-    totalCount?: number;
-  }>;
-  /** 当次场景快照（仅旧任务无入队快照时兜底使用） */
-  loadScene(): Promise<{
-    city: string;
-    day: string;
-    scene: string;
-    temp?: string;
-    tempSource?: string;
-    weatherDesc?: string;
-  }>;
+  /** S1 发送前校验：快照内各单品仍可用且资料版本一致；不满足整体拒绝（标 stale 保留原请求） */
+  validateSnapshotItems(
+    entries: Array<{ realId: string; revision: number }>,
+  ): Promise<{ ok: true } | { ok: false; message: string }>;
   /** 候选落库（succeeded 提交） */
   commitResult(
     taskId: string,
-    result: { candidates: RecommendationCandidate[]; gaps: string[]; summary?: string },
+    result: { candidates: { slots: Array<{ role: SlotRole; itemId: string; note?: string }>; wearStyle: string; reason?: string }[]; gaps: string[]; summary?: string },
   ): Promise<void>;
   onSettled?(): void;
   subscribeChanges?(listener: () => void): () => void;
@@ -75,30 +71,6 @@ export interface RecommendationRunner {
 const EXECUTE_WATCHDOG_MS = 90000;
 const CHAT_TIMEOUT_MS = 60000;
 const UNKNOWN_OUTCOME_KINDS: readonly string[] = ['timeout', 'network', 'cancelled'];
-
-/** 入队时持久化的输入快照（schema v5 起）；损坏视为无快照，回退现读场景 */
-interface StoredRecommendationInput {
-  scene?: { city: string; day: string; scene: string; temp?: string; tempSource?: string; weatherDesc?: string };
-  lockedAliases?: string[];
-  /** 身材资料（M6 批次 2）；旧任务无此字段，仅接受数值防脏数据进提示词 */
-  body?: { heightCm?: number; weightKg?: number } | null;
-  /** 长期偏好（B1：全部参与排序）；消毒后进提示词 */
-  preferences?: string[];
-  /** 当次要求（B1）；消毒后进提示词，仅本次有效 */
-  note?: string | null;
-}
-
-function parseStoredInput(inputJson: string | null): StoredRecommendationInput | null {
-  if (!inputJson) return null;
-  try {
-    const parsed = JSON.parse(inputJson) as StoredRecommendationInput;
-    if (!parsed || typeof parsed !== 'object') return null;
-    if (parsed.scene && typeof parsed.scene.city !== 'string') return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 /** 快照身材资料消毒：只保留正数值字段，脏数据不进提示词 */
 function sanitizeBody(input?: { heightCm?: number; weightKg?: number } | null): {
@@ -127,6 +99,35 @@ function sanitizeNote(input?: unknown): string | null {
   return input.trim().slice(0, 120);
 }
 
+/** 会话槽位名 → 服务层槽位（局部替换约束用） */
+const UI_SLOT_TO_ROLE: Record<string, SlotRole> = {
+  top: 'top',
+  dress: 'dress',
+  bottom: 'bottom',
+  shoes: 'shoes',
+  outer: 'outerwear',
+};
+
+const UI_SLOT_LABELS: Record<string, string> = {
+  top: '上衣',
+  dress: '连衣裙',
+  bottom: '下装',
+  shoes: '鞋子',
+  outer: '外套',
+};
+
+/** 局部替换提示词说明（F8）：目标槽位与保持不变的范围对模型显式声明 */
+function replacementNoteFor(stored: RecommendationInputV2): string | undefined {
+  if (stored.mode !== 'replace_slot' || !stored.targetSlot) return undefined;
+  const label = UI_SLOT_LABELS[stored.targetSlot] ?? stored.targetSlot;
+  const keptCount = stored.lockedRealIds.length;
+  return [
+    `本次是"只换${label}"的局部替换任务：`,
+    `候选必须保留用户当前组合中的其余 ${keptCount} 件单品（见上方锁定清单），只把${label}换成档案中品类相符的其他单品。`,
+    '不要新增其他槽位的衣物（例如不要额外加外套），不要改动保留单品的角色，不要更换穿法。',
+  ].join('');
+}
+
 export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): RecommendationRunner {
   let started = false;
   let foreground = false;
@@ -142,6 +143,16 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
           finishedAt: new Date().toISOString(),
           errorKind: 'config_changed',
           errorSummary: '所选模型配置已被修改或删除，请重新生成',
+        });
+        deps.onSettled?.();
+        continue;
+      }
+      // S1 历史兼容：无 V2 快照的旧 queued 请求标 stale（缺少可核验的真实 ID 映射，不自动重发）
+      if (!parseRecommendationInputV2(task.inputJson)) {
+        await deps.updateStatus(task.id, ['queued'], 'stale', {
+          finishedAt: new Date().toISOString(),
+          errorKind: 'legacy_input',
+          errorSummary: '这条推荐是旧版本请求，缺少可核验的输入快照；请重新生成（不会自动重发）',
         });
         deps.onSettled?.();
         continue;
@@ -168,30 +179,52 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
       return;
     }
 
-    // 场景与锁定集用入队时的快照（不现读会话状态）；旧任务无快照时回退现读
-    const stored = parseStoredInput(task.inputJson);
-    const scene = stored?.scene ?? (await deps.loadScene());
-    const requestedLocks = stored?.lockedAliases ?? [];
-    // B2：档案超限时锁定项优先送入（别名编号保持全柜口径，不重排）
-    const profile = await deps.loadProfile(requestedLocks);
-    const { items, idByAlias } = profile;
-    if (items.length === 0) {
-      await deps.updateStatus(task.id, ['running'], 'failed', {
+    // S1：执行只依据入队快照（claimNext 已确保 V2 可解析）
+    const stored = parseRecommendationInputV2(task.inputJson);
+    if (!stored) {
+      await deps.updateStatus(task.id, ['running'], 'stale', {
         finishedAt: new Date().toISOString(),
-        errorKind: 'profile_empty',
-        errorSummary: '衣橱里没有已入库衣物，先录入并确认品类后再用 AI 推荐',
+        errorKind: 'legacy_input',
+        errorSummary: '缺少可核验的输入快照，请重新生成',
       });
+      deps.onSettled?.();
       return;
     }
-    const lockedAliases = requestedLocks.filter((id) => items.some((item) => item.id === id));
-    const body = sanitizeBody(stored?.body);
-    // B1：长期偏好与当次要求按入队快照发送（不现读，可能与入队时不同）
-    const preferences = sanitizePreferences(stored?.preferences);
-    const note = sanitizeNote(stored?.note);
-    // B2：截取时在提示词中如实说明（不静默丢弃）
-    const profileNote = profile.truncated
-      ? `（衣物较多，本次仅送入 ${profile.sentCount}/${profile.totalCount} 件：锁定单品与较早入库优先；其余未参与本次推荐）`
+
+    // 发送前复核：快照内单品可用性与资料版本（不满足标 stale 保留原请求，不静默舍弃锁定项）
+    const validation = await deps.validateSnapshotItems(
+      stored.items.map((item) => ({ realId: item.realId, revision: item.revision })),
+    );
+    if (!validation.ok) {
+      await deps.updateStatus(task.id, ['running'], 'stale', {
+        finishedAt: new Date().toISOString(),
+        errorKind: 'input_changed',
+        errorSummary: validation.message,
+      });
+      deps.onSettled?.();
+      return;
+    }
+
+    // 提示词档案直接来自快照（别名只作本次请求的传输编号）
+    const items: ProfileItem[] = stored.items.map((item) => ({
+      id: item.alias,
+      name: item.name,
+      category: item.category,
+      attributes: item.attributes,
+      colors: item.colors,
+    }));
+    const idByAlias = aliasMapOf(stored);
+    const aliasByRealId = new Map([...idByAlias].map(([alias, realId]) => [realId, alias]));
+    const lockedAliases = stored.lockedRealIds
+      .map((realId) => aliasByRealId.get(realId))
+      .filter((alias): alias is string => !!alias);
+    const body = sanitizeBody(stored.body);
+    const preferences = sanitizePreferences(stored.preferences);
+    const note = sanitizeNote(stored.note);
+    const profileNote = stored.truncated
+      ? `（衣物较多，本次仅送入 ${stored.items.length}/${stored.totalCount} 件：锁定单品与较早入库优先；其余未参与本次推荐）`
       : undefined;
+    const replacementNote = replacementNoteFor(stored);
 
     const controller = new AbortController();
     markSent();
@@ -204,7 +237,16 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
           { role: 'system', content: recommendationSystemPrompt() },
           {
             role: 'user',
-            content: recommendationUserPrompt({ items, scene, body, lockedAliases, preferences, note, profileNote }),
+            content: recommendationUserPrompt({
+              items,
+              scene: stored.scene,
+              body,
+              lockedAliases,
+              preferences,
+              note,
+              profileNote,
+              replacementNote,
+            }),
           },
         ],
         CHAT_TIMEOUT_MS,
@@ -234,9 +276,26 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
       });
       return;
     }
+    // 本地校验：锁定完整 + 品类与槽位一致 + 局部替换的可变范围（F8）
+    const categoryByAlias = new Map(
+      stored.items.filter((item) => item.category).map((item) => [item.alias, item.category as string]),
+    );
+    const replacement: ReplacementRule | undefined =
+      stored.mode === 'replace_slot' && stored.targetSlot
+        ? {
+            lockedAliases,
+            targetRole: UI_SLOT_TO_ROLE[stored.targetSlot] ?? (stored.targetSlot as SlotRole),
+            baselineRoles: Object.fromEntries(
+              Object.entries(stored.baseline?.slots ?? {})
+                .map(([slot, realId]) => [UI_SLOT_TO_ROLE[slot] ?? slot, aliasByRealId.get(realId)] as const)
+                .filter((entry): entry is [SlotRole, string] => !!entry[1]),
+            ),
+          }
+        : undefined;
     const normalized = normalizeRecommendation(parsedContent.value, idByAlias, {
-      // B3：锁定集作为本地校验输入——候选缺锁定单品在此拒绝，不只靠提示词约束
       requireLockedAliases: lockedAliases,
+      categoryByAlias,
+      replacement,
     });
     if (!normalized.ok) {
       await deps.updateStatus(task.id, ['running'], 'failed', {
@@ -345,5 +404,5 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
   };
 }
 
-/** 推荐输入指纹（store 入队用；与 runner 解耦） */
-export { buildRecommendationInputKey, RECOMMENDATION_PROMPT_VERSION };
+/** 提示词版本（store 入队指纹用） */
+export { RECOMMENDATION_PROMPT_VERSION };

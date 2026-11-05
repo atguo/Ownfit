@@ -13,6 +13,17 @@ import { LEGACY_CALL_REVISION, type ModelConfig } from './types';
 
 const CONFIG_FILE = 'ai-model-configs.json';
 
+/** §8.8（2026-11-04）：独立迁移完成标记（preferences 表，避开 pref- 前缀）。
+ * 与导入同事务提交：标记完成后即使配置被删空也不重导入；损坏旧文件不写标记（保留原来源）。 */
+const MIGRATION_MARKER_ID = 'ai-configs-migrated-v6';
+
+/** 旧 JSON 损坏等迁移问题（供配置页如实展示；不静默当"无配置"） */
+let legacyMigrationProblem: string | null = null;
+
+export function getLegacyMigrationProblem(): string | null {
+  return legacyMigrationProblem;
+}
+
 function configFile(): File {
   return new File(Paths.document, CONFIG_FILE);
 }
@@ -90,49 +101,102 @@ const UPSERT_SQL = `INSERT INTO ai_configs (
      has_key = excluded.has_key, test_status = excluded.test_status, test_message = excluded.test_message,
      tested_at = excluded.tested_at, call_revision = excluded.call_revision, updated_at = excluded.updated_at`;
 
-/** 旧 JSON → 数据库一次性搬迁：仅当表为空且文件可解析时执行；搬迁后尽力删除旧文件 */
+/** 旧 JSON → 数据库一次性搬迁（§8.8 修订）：独立完成标记控制——
+ * - 标记存在：不再读旧文件（表被删空也不重导入）；旧文件残留仅尝试清理一次；
+ * - 文件不存在：写标记（后续启动零开销）；
+ * - 文件存在且可解析：导入与标记同事务提交；删除旧文件失败登记待清理（不影响结果）；
+ * - 文件损坏/不可解析：保留原文件、不写标记、登记问题（如实展示，不静默当"无配置"）。 */
 async function migrateLegacyJsonFile(db: Awaited<ReturnType<typeof getDb>>): Promise<void> {
+  const marker = await db.getFirstAsync<{ id: string }>(
+    'SELECT id FROM preferences WHERE id = ?',
+    MIGRATION_MARKER_ID,
+  );
   const file = configFile();
-  if (!file.exists) return;
-  const count = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM ai_configs');
-  if ((count?.n ?? 0) > 0) return; // 表已有数据：不再读旧文件（删除失败残留的文件保持惰性）
+  if (marker) {
+    // 已迁移：旧文件残留只做静默清理（失败不重试导入）
+    if (file.exists) {
+      try {
+        file.delete();
+      } catch {
+        // 删除失败：文件残留但永不读取
+      }
+    }
+    return;
+  }
+  if (!file.exists) {
+    const now = new Date().toISOString();
+    await db.runAsync(
+      'INSERT INTO preferences (id, value, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      MIGRATION_MARKER_ID,
+      'done',
+      'system',
+      now,
+      now,
+    );
+    return;
+  }
   let configs: ModelConfig[];
   try {
     const parsed: unknown = JSON.parse(file.textSync());
-    if (!Array.isArray(parsed)) return; // 损坏文件：保留原样，按无配置处理
+    if (!Array.isArray(parsed)) {
+      // 损坏文件：保留原样，不写成功标记
+      legacyMigrationProblem = '旧配置文件内容不是有效的配置列表，已保留原文件未删除；当前按无旧配置处理，可到设置里重新添加模型。';
+      return;
+    }
     configs = parsed as ModelConfig[];
   } catch {
-    return; // 解析失败：保留原文件，不静默清空来源
+    legacyMigrationProblem = '旧配置文件无法解析（可能损坏），已保留原文件未删除；当前按无旧配置处理，可到设置里重新添加模型。';
+    return;
   }
+  const now = new Date().toISOString();
   await db.withTransactionAsync(async () => {
     for (const config of configs) {
       await db.runAsync(UPSERT_SQL, ...configToRow(config));
     }
+    // 迁移数据与完成标记同事务：标记写入 = 迁移完成（失败一起回滚，下次重试）
+    await db.runAsync(
+      'INSERT INTO preferences (id, value, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      MIGRATION_MARKER_ID,
+      'done',
+      'system',
+      now,
+      now,
+    );
   });
   try {
     file.delete();
   } catch {
-    // 删除失败：文件残留但不再被读取（表已非空，下次启动跳过迁移）
+    // 删除失败：文件残留但标记已完成，后续启动不再读取
   }
 }
 
 /**
  * 从数据库加载配置镜像（APP 启动与数据库安全模式重试后调用）。
- * 成功后同步 getter 可用；失败时镜像保持未加载，AI 功能按"配置未就绪"表达。
+ * §8.8：共享初始化 Promise——并发调用只执行一次迁移+加载，不各自跑迁移；
+ * 失败时允许下次调用重试。成功后同步 getter 可用；失败时镜像保持未加载，
+ * AI 功能按"配置未就绪"表达。
  */
-export async function ensureConfigCache(): Promise<boolean> {
-  try {
-    const db = await getDb();
-    await migrateLegacyJsonFile(db);
-    const rows = await db.getAllAsync<Parameters<typeof rowToConfig>[0]>(
-      'SELECT * FROM ai_configs ORDER BY created_at ASC',
-    );
-    cache = rows.map(rowToConfig);
-    return true;
-  } catch {
-    cache = null;
-    return false;
+let ensurePromise: Promise<boolean> | null = null;
+
+export function ensureConfigCache(): Promise<boolean> {
+  if (!ensurePromise) {
+    ensurePromise = (async () => {
+      try {
+        const db = await getDb();
+        await migrateLegacyJsonFile(db);
+        const rows = await db.getAllAsync<Parameters<typeof rowToConfig>[0]>(
+          'SELECT * FROM ai_configs ORDER BY created_at ASC',
+        );
+        cache = rows.map(rowToConfig);
+        return true;
+      } catch (error) {
+        cache = null;
+        ensurePromise = null; // 失败允许重试（下次调用重新初始化）
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+    })().catch(() => false);
   }
+  return ensurePromise;
 }
 
 export function loadConfigs(): ModelConfig[] {
@@ -223,11 +287,20 @@ export async function addConfig(input: ConfigInput): Promise<ModelConfig> {
 /**
  * 更新配置：Key 为空时沿用原 Key；URL 类型/地址等变更后测试状态重置为未测试。
  * callRevision 仅在影响调用结果的字段变化时更新（名称、测试结果不算，见 D2）。
+ * §8.8 密钥一致性（2026-11-04）：换 Key 不原位覆盖旧凭证——先写新的 keyRef，
+ * DB 成功提交新引用与 callRevision 后再清旧凭证；DB 失败删除新凭证（旧配置仍可用）。
  */
 export async function updateConfig(id: string, input: ConfigInput): Promise<ModelConfig | undefined> {
   const previous = getConfig(id);
   if (!previous) return undefined;
-  if (input.apiKey) await storeKey(previous.keyRef, input.apiKey);
+  let keyRef = previous.keyRef;
+  let newKeyRef: string | null = null;
+  if (input.apiKey) {
+    // 随机后缀防碰撞：连续快速换 Key 不能复用同一 keyRef（同毫秒会互相覆盖凭证）
+    keyRef = `ai-key-${id}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    await storeKey(keyRef, input.apiKey);
+    newKeyRef = keyRef;
+  }
   const callChanged =
     previous.urlKind !== input.urlKind ||
     previous.baseUrl !== input.baseUrl ||
@@ -236,6 +309,7 @@ export async function updateConfig(id: string, input: ConfigInput): Promise<Mode
     !!input.apiKey;
   const config: ModelConfig = {
     ...previous,
+    keyRef, // §8.8：换 Key 时为新 keyRef（DB 成功提交后才清旧凭证）
     name: input.name,
     urlKind: input.urlKind,
     baseUrl: input.baseUrl,
@@ -248,7 +322,19 @@ export async function updateConfig(id: string, input: ConfigInput): Promise<Mode
     callRevision: callChanged ? newCallRevision() : previous.callRevision ?? LEGACY_CALL_REVISION,
     updatedAt: new Date().toISOString(),
   };
-  await persistConfig(config);
+  try {
+    await persistConfig(config);
+  } catch (error) {
+    // DB 失败：删除刚写的新凭证，旧 keyRef 与旧凭证继续可用
+    if (newKeyRef) {
+      await SecureStore.deleteItemAsync(newKeyRef).catch(() => undefined);
+    }
+    throw error;
+  }
+  if (newKeyRef && newKeyRef !== previous.keyRef) {
+    // DB 已提交新引用：清旧凭证（失败只残留旧凭证，不影响新引用生效）
+    await SecureStore.deleteItemAsync(previous.keyRef).catch(() => undefined);
+  }
   return config;
 }
 

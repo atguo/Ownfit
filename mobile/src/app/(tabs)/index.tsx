@@ -9,6 +9,7 @@ import { LookArt } from '../../ui/components/ItemArt';
 import { Tag } from '../../ui/components/Basics';
 import { SceneSheet } from '../../features/sheets/SceneSheet';
 import { setContext, useDemoStore } from '../../features/demoStore';
+import { isRealWeatherUsable } from '../../features/recommendationStore';
 import { getSceneDefault } from '../../data/repositories/settingsRepository';
 import {
   getItem,
@@ -96,6 +97,8 @@ export default function TodayScreen() {
           <Text style={styles.weatherSub}>
             {context.day} · {context.scene}
             {context.tempSource === 'demo' ? '　天气为示例' : context.tempSource === 'manual' ? '　温度为手动填写' : ''}
+            {/* F4：长期前台停留也在展示前校验有效期——过期实时天气明确标注，不冒充当前 */}
+            {context.tempSource === 'real' && !isRealWeatherUsable(context) ? '　实时天气已过期，可在场景弹层重查' : ''}
           </Text>
         </View>
         <Icon name="chevron" size={15} color={colors.ink} />

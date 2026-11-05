@@ -193,26 +193,52 @@ test('B1：长期偏好与本次要求进提示词；实时天气带天气描述
   assert.doesNotMatch(manualPrompt, /天气=/, '手动温度不编造天气描述');
   assert.doesNotMatch(manualPrompt, /长期偏好/);
 
+  // 指纹（S1 起为 V2，recommendationInput 模块）：偏好/当次要求参与，规范化稳定
+  const inputModule = createLoader(createMemoryAdapter().adapter)(
+    path.resolve(__dirname, '../src/services/ai/recommendationInput.ts'),
+  );
   const key = JSON.parse(
-    service.buildRecommendationInputKey({
-      aliasItemIds: ['item-1'],
-      scene: { city: '北京', day: '今天', scene: '通勤' },
-      preferences: ['简洁'],
-      note: '正式一点',
+    inputModule.buildRecommendationInputKeyV2({
+      stored: {
+        items: [{ realId: 'r1', alias: 'item-1', revision: 1, name: null, category: '上衣', attributes: [], colors: [] }],
+        truncated: false,
+        totalCount: 1,
+        lockedRealIds: [],
+        scene: { city: '北京', day: '今天', scene: '通勤', targetDate: '2026-11-04' },
+        body: null,
+        preferences: ['简洁'],
+        note: '正式一点',
+        mode: 'full',
+        baseline: null,
+        targetSlot: null,
+      },
       configId: 'cfg',
       configRevision: 'rev',
+      contractVersion: 'v',
+      promptVersion: '5',
     }),
   );
   assert.deepEqual(key.preferences, ['简洁']);
   assert.equal(key.note, '正式一点');
   const key2 = JSON.parse(
-    service.buildRecommendationInputKey({
-      aliasItemIds: ['item-1'],
-      scene: { city: '北京', day: '今天', scene: '通勤' },
-      preferences: ['简洁'],
-      note: '正式一点',
+    inputModule.buildRecommendationInputKeyV2({
+      stored: {
+        items: [{ realId: 'r1', alias: 'item-1', revision: 1, name: null, category: '上衣', attributes: [], colors: [] }],
+        truncated: false,
+        totalCount: 1,
+        lockedRealIds: [],
+        scene: { city: '北京', day: '今天', scene: '通勤', targetDate: '2026-11-04' },
+        body: null,
+        preferences: ['简洁'],
+        note: '正式一点',
+        mode: 'full',
+        baseline: null,
+        targetSlot: null,
+      },
       configId: 'cfg',
       configRevision: 'rev',
+      contractVersion: 'v',
+      promptVersion: '5',
     }),
   );
   assert.deepEqual(key, key2, '相同输入指纹稳定');
@@ -460,19 +486,34 @@ test('C2：预览指纹含单品版本与参考版本；previewInputMatches 判�
   }
 });
 
-test('C2/R8：savePendingDownload 持久化下载地址，任务读取 pendingUrl', async () => {
+test('C2/R8/F6：savePendingDownload 条件持久化（仅 running 可写），pendingUrl 可读回', async () => {
   const { db, adapter, close } = await freshDb();
   try {
     const repo = createLoader(adapter)(PREVIEW_REPO);
     seedPreviewTask(db, {
       id: 'pt-1',
       inputKey: JSON.stringify({ itemIds: ['a'], referenceUpdatedAt: 'ref-1', wearStyle: '' }),
+      status: 'running',
       resultJson: null,
     });
-    await repo.savePendingDownload('pt-1', 'https://cdn.test/img.jpg', '提示词');
+    const written = await repo.savePendingDownload('pt-1', 'https://cdn.test/img.jpg', '提示词');
+    assert.equal(written, true, 'running 状态可写待下载');
     const task = await repo.getPreviewTask('pt-1');
     assert.equal(task.pendingUrl, 'https://cdn.test/img.jpg');
     assert.equal(task.resultPreviewPath, null);
+
+    // F6：任务已离开 running（看门狗/取消先行）→ 迟到写入被拒，result_json 不被覆盖
+    seedPreviewTask(db, {
+      id: 'pt-2',
+      inputKey: JSON.stringify({ itemIds: ['a'], referenceUpdatedAt: 'ref-1', wearStyle: '' }),
+      status: 'interrupted',
+      resultJson: JSON.stringify({ previewPath: 'previews/old.jpg' }),
+    });
+    const late = await repo.savePendingDownload('pt-2', 'https://cdn.test/late.jpg', 'x');
+    assert.equal(late, false, '终态任务拒绝写入待下载');
+    const lateTask = await repo.getPreviewTask('pt-2');
+    assert.equal(lateTask.pendingUrl, null);
+    assert.equal(lateTask.resultPreviewPath, 'previews/old.jpg', '既有结果不被迟到写入覆盖');
   } finally {
     close();
   }
@@ -482,7 +523,7 @@ test('C2/R8：savePendingDownload 持久化下载地址，任务读取 pendingUr
 // C5：同条件比较
 // ---------------------------------------------------------------------------
 
-test('C5：同参考版本两张成功图可成组；参考版本不同/非成功拒绝', async () => {
+test('C5/F7：比较必须绑定不可变产物——legacy 记录不冒充同条件；非成功/自身拒绝', async () => {
   const { db, adapter, close } = await freshDb();
   try {
     const repo = createLoader(adapter)(PREVIEW_REPO);
@@ -490,24 +531,20 @@ test('C5：同参考版本两张成功图可成组；参考版本不同/非成�
     const keyRef2 = JSON.stringify({ itemIds: ['b'], referenceUpdatedAt: 'ref-2', wearStyle: '' });
     seedPreviewTask(db, { id: 'pa', inputKey: keyRef1, resultJson: JSON.stringify({ previewPath: 'previews/a.jpg' }) });
     seedPreviewTask(db, { id: 'pb', inputKey: keyRef1, resultJson: JSON.stringify({ previewPath: 'previews/b.jpg' }) });
-    seedPreviewTask(db, { id: 'pc', inputKey: keyRef2, resultJson: JSON.stringify({ previewPath: 'previews/c.jpg' }) });
     seedPreviewTask(db, { id: 'pf', inputKey: keyRef1, status: 'failed', resultJson: null });
 
-    const ok = await repo.createPreviewComparison('pa', 'pb');
-    assert.ok(ok.ok, '同参考版本两张成功图可成组');
-    const row = db.prepare('SELECT * FROM preview_comparisons WHERE task_a_id = ?').get('pa');
-    assert.ok(row, '比较组已落库');
-    assert.equal(row.reference_updated_at, 'ref-1');
-
-    const crossRef = await repo.createPreviewComparison('pa', 'pc');
-    assert.equal(crossRef.ok, false, '参考版本不同拒绝');
-    assert.ok(crossRef.ok === false && /参考版本/.test(crossRef.message));
+    // F7：成功但缺少不可变产物引用（旧版本记录）→ 拒绝，可普通查看但不标同条件
+    const legacy = await repo.createPreviewComparison('pa', 'pb');
+    assert.equal(legacy.ok, false);
+    assert.match(legacy.ok === false ? legacy.message : '', /不可变的产物引用/);
 
     const withFailed = await repo.createPreviewComparison('pa', 'pf');
     assert.equal(withFailed.ok, false, '失败记录不能比较');
 
     const self = await repo.createPreviewComparison('pa', 'pa');
     assert.equal(self.ok, false, '同一记录不能与自己比较');
+
+    void keyRef2; // 同参考不同配置/模板的条件矩阵见 previewArtifacts.test.cjs（绑定真实产物）
   } finally {
     close();
   }

@@ -11,6 +11,7 @@ import {
   enqueuePreview,
   loadCurrentPreviewInput,
   loadLatestPreviewCheck,
+  loadLatestPreviewPostProcess,
   rememberDefaultImageGenConfig,
   resolveImageGenForPreview,
   retryPreviewSave,
@@ -25,7 +26,9 @@ import {
   type PreviewTask,
 } from '../../data/repositories/previewRepository';
 import type { PreviewCheckRecord, PreviewCheckOverall } from '../../data/repositories/previewCheckRepository';
+import type { PreviewPostProcessRecord } from '../../data/repositories/previewPostprocessRepository';
 import type { ConfigResolution } from '../../services/ai/visionConfig';
+import { checkGarmentEvidence } from '../../services/ai/evidenceCheck';
 import { callRevisionOf } from '../../services/ai/types';
 import { colors, type } from '../../ui/tokens';
 
@@ -101,6 +104,23 @@ function describeDeviations(check: PreviewCheckRecord): string {
   return `（${deviated.length} 处：${deviated.map((v) => v.note ?? v.itemId).join('；').slice(0, 80)}）`;
 }
 
+/** §8.4.8：后处理阶段行——区分"图已生成、核对中/纠偏中""未核对""无法判断""重大偏离" */
+function postProcessLine(record: PreviewPostProcessRecord | null): string | null {
+  if (!record) return null;
+  switch (record.stage) {
+    case 'queued':
+      return '排队自动核对中…';
+    case 'checking':
+      return '自动核对中…';
+    case 'correcting':
+      return '自动核对发现重大偏离，正在按核对意见纠偏重生成（至多一次）…';
+    case 'interrupted':
+      return `自动核对被中断（${record.error ?? '结果未知'}），未自动重试`;
+    default:
+      return null; // checked/unchecked/unknown 的结论由核对记录行表达
+  }
+}
+
 export function PreviewSheet({
   visible,
   onClose,
@@ -121,9 +141,13 @@ export function PreviewSheet({
   const [resolution, setResolution] = useState<ConfigResolution | null>(null);
   const [tasks, setTasks] = useState<PreviewTask[]>([]);
   const [checks, setChecks] = useState<Record<string, PreviewCheckRecord | null>>({});
+  // §8.4.3：后处理阶段（图已生成、核对中/纠偏中/未核对…）与生成状态分开展示
+  const [postProcess, setPostProcess] = useState<Record<string, PreviewPostProcessRecord | null>>({});
   const [currentInput, setCurrentInput] = useState<Awaited<ReturnType<typeof loadCurrentPreviewInput>>>(null);
+  // A3：证据缺口提示（可跳过；只提示，不拦截）
+  const [evidenceWarnings, setEvidenceWarnings] = useState<string[]>([]);
   const [starting, setStarting] = useState(false);
-  // C5：比较模式与选择（最多两张，同人物参考版本才可成组）
+  // C5：比较模式与选择（最多两张，同条件校验通过才可成组）
   const [compareMode, setCompareMode] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
   const [comparisonView, setComparisonView] = useState<{ a: PreviewTask; b: PreviewTask } | null>(null);
@@ -131,15 +155,30 @@ export function PreviewSheet({
   const reload = useCallback(async () => {
     const recent = await listRecentPreviewTasks(8);
     setTasks(recent);
-    // C8：核对状态随任务一起加载（逐任务最近一次记录）
+    // C8/§8.4：核对状态与后处理阶段随任务一起加载
     const nextChecks: Record<string, PreviewCheckRecord | null> = {};
+    const nextPost: Record<string, PreviewPostProcessRecord | null> = {};
     for (const task of recent) {
-      nextChecks[task.id] = task.status === 'succeeded' ? await loadLatestPreviewCheck(task.id) : null;
+      if (task.status === 'succeeded') {
+        nextChecks[task.id] = await loadLatestPreviewCheck(task.id);
+        nextPost[task.id] = await loadLatestPreviewPostProcess(task.id);
+      } else {
+        nextChecks[task.id] = null;
+        nextPost[task.id] = null;
+      }
     }
     setChecks(nextChecks);
-    // C2："本方案"判定按完整输入版本（单品+版本+穿法+参考版本）
-    setCurrentInput(await loadCurrentPreviewInput(itemIds, wearStyle));
-  }, [itemIds, wearStyle]);
+    setPostProcess(nextPost);
+    // C2/F3："本方案"判定按完整输入版本（单品+版本+逐件穿法+主穿法+参考版本与视角）
+    setCurrentInput(await loadCurrentPreviewInput(itemIds, wearStyle, itemWear));
+    // A3/§8.8：本次选中单品的证据缺口提示（每件最多一条最关键项，可跳过，不拦截生成）
+    const warnings: string[] = [];
+    for (const itemId of itemIds.slice(0, 6)) {
+      const evidence = await checkGarmentEvidence(itemId);
+      if (evidence?.missing.length) warnings.push(`「${evidence.name}」${evidence.missing[0]}`);
+    }
+    setEvidenceWarnings(warnings);
+  }, [itemIds, wearStyle, itemWear]);
 
   useEffect(() => {
     // R1（2026-11-04）：执行器生命周期由应用层统一管理（app/_layout）；
@@ -251,6 +290,9 @@ export function PreviewSheet({
   return (
     <Sheet visible={visible} title="上身预览" onClose={onClose}>
       <Notice>AI 生成示意图，非真实试穿。最终效果以你的实际穿着为准。</Notice>
+      {evidenceWarnings.length ? (
+        <Notice>{`还原依据提示（可跳过，不拦截生成）：${evidenceWarnings.join('；')}`}</Notice>
+      ) : null}
 
       {resolution?.status === 'choose' ? (
         <View>
@@ -282,7 +324,7 @@ export function PreviewSheet({
       {tasks.filter((t) => t.status === 'succeeded' && t.resultPreviewPath).length >= 2 ? (
         compareMode ? (
           <View style={styles.compareBar}>
-            <Text style={styles.note}>{`已选 ${selectedForCompare.length}/2（同人物参考版本才能比较）`}</Text>
+            <Text style={styles.note}>{`已选 ${selectedForCompare.length}/2（同条件校验通过才能比较）`}</Text>
             <View style={styles.compareBarButtons}>
               <Button variant="secondary" label="开始比较" onPress={startCompare} disabled={selectedForCompare.length !== 2} />
               <Button
@@ -311,7 +353,8 @@ export function PreviewSheet({
         <View style={styles.comparisonCard}>
           <Text style={styles.sectionTitle}>同条件比较</Text>
           <Text style={styles.note}>
-            两次生成使用同一人物参考版本与生成参数；参数一致不保证视觉条件完全一致，允许两套都不选。
+            两条记录的人物参考版本、模型配置与提示词模板一致（创建时已校验）；
+            姿态/背景等无法硬参数控制的条件仍可能不同，参数一致不保证视觉完全一致。允许两套都不选。
           </Text>
           <View style={styles.compareRow}>
             {[comparisonView.a, comparisonView.b].map((task, index) => {
@@ -342,13 +385,16 @@ export function PreviewSheet({
       {tasks.map((task) => {
         const current = currentInput ? previewInputMatches(task, currentInput) : false;
         const checkLineResult = checkLine(checks[task.id] ?? null);
+        const postLine = postProcessLine(postProcess[task.id] ?? null);
+        const checkOverall = checks[task.id]?.overall ?? null;
+        const compareSelectable = task.status === 'succeeded' && !!task.resultPreviewPath && checkOverall !== 'major';
         return (
           <View key={task.id} style={styles.taskCard}>
             <View style={styles.taskHead}>
               <Tag label={current ? '本方案' : '方案已变化'} />
               <Text style={styles.taskStatus}>{statusLine(task)}</Text>
             </View>
-            {compareMode && task.status === 'succeeded' && task.resultPreviewPath ? (
+            {compareMode && compareSelectable ? (
               <Button
                 variant="chip"
                 label={selectedForCompare.includes(task.id) ? '已选入比较' : '选入比较'}
@@ -356,6 +402,9 @@ export function PreviewSheet({
                 onPress={() => toggleCompareSelection(task.id)}
                 style={styles.gap}
               />
+            ) : null}
+            {compareMode && !compareSelectable && task.status === 'succeeded' && task.resultPreviewPath ? (
+              <Text style={[styles.checkText, styles.checkWarn]}>自动核对为重大偏离，不进入同条件比较（可单独查看）</Text>
             ) : null}
             {task.status === 'succeeded' && task.resultPreviewPath ? (
               <>
@@ -365,6 +414,7 @@ export function PreviewSheet({
                   resizeMode="contain"
                   accessibilityLabel="上身预览示意图"
                 />
+                {postLine ? <Text style={styles.checkText}>{postLine}</Text> : null}
                 {checkLineResult ? (
                   <Text
                     style={[

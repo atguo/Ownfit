@@ -25,10 +25,20 @@ import {
   type PreviewCheckRecord,
 } from '../data/repositories/previewCheckRepository';
 import {
+  claimNextPostProcess,
+  updatePostProcessStage,
+  recoverInFlightPostProcess,
+  getLatestPostProcess,
+  type PreviewPostProcessRecord,
+} from '../data/repositories/previewPostprocessRepository';
+import {
   createPreviewTask,
+  downloadAndCommitArtifact,
+  getPreviewArtifact,
   getPreviewReference,
   getPreviewTask,
   listPreviewTasksByStatus,
+  savePendingDownload,
   PREVIEW_TASK_KIND,
   updatePreviewTaskStatus,
 } from '../data/repositories/previewRepository';
@@ -123,11 +133,17 @@ export function initPreviewRunner(): PreviewRunner {
         })();
         return Promise.race([call, hardTimeout]);
       },
-      saveResultImage: (taskId, url, prompt) =>
-        import('../data/repositories/previewRepository').then((m) => m.savePreviewResultImage(taskId, url, prompt)),
-      // R8：生成成功但落盘失败时持久化下载地址，供"仅重试下载"（不重新生成、不重复计费）
-      savePendingDownload: (taskId, url, prompt) =>
-        import('../data/repositories/previewRepository').then((m) => m.savePendingDownload(taskId, url, prompt)),
+      // R8/F6：生成成功但落盘失败时条件持久化下载地址，供"仅重试下载"（不重新生成、不重复计费）
+      savePendingDownload: (taskId, url, prompt) => savePendingDownload(taskId, url, prompt),
+      // §8.4.1 条件提交产物（下载 + 状态/指针校验 + 产物与后处理落库）
+      commitArtifact: (input) => downloadAndCommitArtifact(input),
+      // §8.4.3 后处理生命周期（核对/纠偏持久状态；应用层领取；入队由条件提交完成）
+      postprocess: {
+        claim: () => claimNextPostProcess(),
+        updateStage: (id, allowedFrom, to, patch) => updatePostProcessStage(id, allowedFrom, to, patch),
+        getArtifact: (artifactId) => getPreviewArtifact(artifactId),
+        recoverInFlight: () => recoverInFlightPostProcess(),
+      },
       // C2/R5 发送前复核：单品可用性与资料版本、人物参考版本与入队快照一致
       validateInput: async (itemIds, itemRevisions, referenceUpdatedAt) => {
         for (const itemId of itemIds) {
@@ -169,21 +185,21 @@ export function initPreviewRunner(): PreviewRunner {
           callRevision: resolution.callRevision,
         };
       },
-      loadCheckImages: async (task) => {
-        const garments: Array<{ itemId: string; dataUrl: string | null }> = [];
+      // §8.4.5 核对输入图：单品原图（核对用证据，不拿 480px 缩略图替代）+ 人物参考 + 指定产物。
+      // 每件带实际附图序号（缺图=null），不通过 filter 改变图与清单的对应关系。
+      loadCheckImages: async ({ task, artifactPath }) => {
+        const garments: Array<{ itemId: string; dataUrl: string | null; imageIndex: number | null }> = [];
+        let attached = 0;
         for (const itemId of task.itemIds) {
           const paths = await getMainPhotoPaths(itemId);
-          if (!paths) {
-            garments.push({ itemId, dataUrl: null });
-            continue;
-          }
-          const file = new File(Paths.document, paths.thumbPath);
-          if (!file.exists) {
-            garments.push({ itemId, dataUrl: null });
+          const file = paths ? new File(Paths.document, paths.originalPath) : null;
+          if (!file || !file.exists) {
+            garments.push({ itemId, dataUrl: null, imageIndex: null });
             continue;
           }
           const base64 = await file.base64();
-          garments.push({ itemId, dataUrl: `data:image/jpeg;base64,${base64}` });
+          attached += 1;
+          garments.push({ itemId, dataUrl: `data:image/jpeg;base64,${base64}`, imageIndex: attached });
         }
         let person: string | null = null;
         const reference = await getPreviewReference();
@@ -192,10 +208,8 @@ export function initPreviewRunner(): PreviewRunner {
           if (refFile.exists) person = `data:image/jpeg;base64,${await refFile.base64()}`;
         }
         let result: string | null = null;
-        if (task.resultPreviewPath) {
-          const resultFile = new File(Paths.document, task.resultPreviewPath);
-          if (resultFile.exists) result = `data:image/jpeg;base64,${await resultFile.base64()}`;
-        }
+        const resultFile = new File(Paths.document, artifactPath);
+        if (resultFile.exists) result = `data:image/jpeg;base64,${await resultFile.base64()}`;
         return { garments, person, result };
       },
       runCheck: async (input) => {
@@ -234,6 +248,11 @@ export async function loadLatestPreviewCheck(taskId: string): Promise<PreviewChe
   return getLatestPreviewCheck(taskId);
 }
 
+/** 任务最近一条后处理记录（面板展示"图已生成、核对中"等阶段；null=尚无） */
+export async function loadLatestPreviewPostProcess(taskId: string): Promise<PreviewPostProcessRecord | null> {
+  return getLatestPostProcess(taskId);
+}
+
 /** R8：仅重试下载（生成成功但保存失败的任务；不重新生成、不重复计费） */
 export async function retryPreviewSave(taskId: string): Promise<string> {
   const { retryPreviewDownload } = await import('../data/repositories/previewRepository');
@@ -263,16 +282,20 @@ export type EnqueuePreviewResult =
   | { status: 'existing'; taskId: string }
   | { status: 'rejected'; reason: 'reference_missing' | 'items_invalid'; message?: string };
 
-/** 当前方案的输入版本（C2）：单品集 + 各单品资料版本 + 穿法 + 人物参考版本。
- * 供面板做“本方案/方案已变化”判定与入队快照；单品缺失/不可用返回 null。 */
+/** 当前方案的输入版本（C2/F3，§8.3）：单品集 + 各单品资料版本 + 有效逐件穿法 +
+ * 主穿法 + 人物参考版本与视角。供面板做"本方案/方案已变化"判定与入队快照；
+ * 单品缺失/不可用返回 null。itemWear 由调用方按槽位语义归一后传入（入队原样保存）。 */
 export async function loadCurrentPreviewInput(
   itemIds: string[],
   wearStyle: string,
+  itemWear?: Record<string, string | undefined>,
 ): Promise<{
   itemIds: string[];
   itemRevisions: Record<string, number>;
   wearStyle: string;
+  itemWear: Record<string, string>;
   referenceUpdatedAt: string;
+  referenceKind: string | null;
 } | null> {
   const reference = await getPreviewReference();
   if (!reference) return null;
@@ -282,7 +305,18 @@ export async function loadCurrentPreviewInput(
     if (!item || item.status !== 'active' || !item.category) return null;
     itemRevisions[itemId] = item.revision;
   }
-  return { itemIds, itemRevisions, wearStyle, referenceUpdatedAt: reference.updatedAt };
+  const normalizedWear: Record<string, string> = {};
+  for (const [itemId, style] of Object.entries(itemWear ?? {})) {
+    if (typeof style === 'string' && style) normalizedWear[itemId] = style;
+  }
+  return {
+    itemIds,
+    itemRevisions,
+    wearStyle,
+    itemWear: normalizedWear,
+    referenceUpdatedAt: reference.updatedAt,
+    referenceKind: reference.kind ?? null,
+  };
 }
 
 /** 入队一次预览生成（模型选择由面板先完成；参考照缺失或单品不可用时拒绝） */
