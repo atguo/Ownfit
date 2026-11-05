@@ -26,14 +26,17 @@ keyPassword=<同一密码>
 
 ```bash
 pnpm --filter @ownfit/mobile exec expo prebuild -p android
-pnpm --filter @ownfit/mobile exec expo run:android --variant release   # 或 cd mobile/android && ./gradlew assembleRelease
+# JS 打包（Metro）需要 node >= 18：本机默认 PATH 的 node 16 会让 createBundleReleaseJsAndAssets
+# 失败（exit 7）。构建时把 node 24 前置到 PATH（2026-11-05 预检确认的机器事实）：
+export PATH="/c/Users/Admin/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH"
+cd mobile/android && ./gradlew assembleRelease
 ```
 
 prebuild 时 `plugins/withReleaseSigning.js` 会把 `ownfitReleaseSigning` 注入
 `android/app/build.gradle` 的 release 构建型。注入核验：
 
 ```bash
-grep -n "ownfitReleaseSigning" mobile/android/app/build.gradle   # 应命中 2 处（定义 + release 引用）
+grep -c "ownfitReleaseSigning" mobile/android/app/build.gradle   # 应命中 4 处（定义/引用/guard 注释与标记）
 grep -n 'keystore.properties' mobile/android/app/build.gradle     # 路径应为 ../keystores/keystore.properties
 ```
 
@@ -42,9 +45,11 @@ grep -n 'keystore.properties' mobile/android/app/build.gradle     # 路径应为
 `android/` 目录注入的是 `../../`（会解析到仓库根导致静默回退 debug 签名），需重跑
 `expo prebuild -p android` 让插件升级注入（旧块会被自动修正路径并补校验）。
 
-**release 构建强制正式签名（F5）**：`assembleRelease`/`bundleRelease` 任务在缺
-`keystore.properties`、缺必填字段或 storeFile 不存在时会以不含密码的 GradleException
-直接失败，不再静默回退 debug 签名；`assembleDebug` 与日常 prebuild 不受影响。
+**release 构建强制正式签名（F5，2026-11-05 真实模板实测）**：guard 挂在
+`gradle.taskGraph.whenReady`——`assembleRelease`/`bundleRelease` 在缺 `keystore.properties`、
+缺必填字段或 storeFile 不存在时，于任务图就绪时立即以不含密码的 GradleException 失败
+（实测无材料时 17 秒失败，早于依赖编译与 JS 打包），不再静默回退 debug 签名；
+`assembleDebug` 与日常 prebuild 不受影响。
 
 产物验签（确认不是 debug 签名）：
 

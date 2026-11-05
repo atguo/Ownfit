@@ -76,8 +76,9 @@ test('注入：release 块换正式签名、debug 块保持 debug、guard 校验
   // properties 路径正确（不含旧 ../../）
   assert.ok(patched.includes('rootProject.file("../keystores/keystore.properties")'));
   assert.ok(!patched.includes('"../../keystores/keystore.properties"'));
-  // 缺签名材料时 release 打包任务显式失败（不含密码）
+  // 缺签名材料时在任务图就绪时立即失败（不含密码，早于依赖编译）
   assert.match(patched, /ownfitReleaseSigningGuard/);
+  assert.match(patched, /gradle\.taskGraph\.whenReady/);
   assert.match(patched, /GradleException\("release 正式签名未配置：缺少 mobile\/keystores\/keystore\.properties/);
   assert.match(patched, /android\.signingConfigs\.findByName\("ownfitRelease"\) == null/);
   // 必填字段与 storeFile 存在性在配置阶段校验（缺字段不创建 ownfitRelease 签名 → guard 拦截）

@@ -68,23 +68,26 @@ function injectSigningConfig(contents) {
   return { contents: patched, injected: true };
 }
 
-/** 注入 release 打包校验（缺正式签名即失败；debug/prebuild 不受影响） */
+/** 注入 release 打包校验（缺正式签名即失败；debug/prebuild 不受影响）。
+ * 挂在 taskGraph.whenReady：图解析后、任何任务执行前即失败——不在依赖库全量编译后才发现缺签名。 */
 function injectSigningGuard(contents) {
   if (contents.includes(GUARD_MARKER)) return contents;
   const guardBlock = [
     '',
     `// ${GUARD_MARKER}：分发构建必须使用正式签名（F5，2026-11-04）——`,
-    '// release 打包任务缺 keystore.properties/必填字段/keystore 文件时立即失败（不含密码），',
-    '// 不静默回退 debug 签名；debug 构建与不需要密钥的日常 prebuild 不受影响。',
-    'tasks.matching { it.name.startsWith("assemble") && it.name.contains("Release") || it.name.startsWith("bundle") && it.name.contains("Release") }.configureEach {',
-    '    doFirst {',
-    `        def guardPropsFile = rootProject.file("${PROPS_FILE}")`,
-    '        if (!guardPropsFile.exists()) {',
-    '            throw new GradleException("release 正式签名未配置：缺少 mobile/keystores/keystore.properties（内测分发包禁止 debug 签名）。生成与保管步骤见 mobile/keystores/README.md")',
-    '        }',
-    '        if (android.signingConfigs.findByName("ownfitRelease") == null) {',
-    '            throw new GradleException("release 正式签名未生效：keystore.properties 缺少必填字段或 storeFile 不存在。请核对 mobile/keystores/README.md（此错误不含密码信息）")',
-    '        }',
+    '// release 打包任务缺 keystore.properties/必填字段/keystore 文件时，在任务图就绪时立即失败（不含密码），',
+    '// 不静默回退 debug 签名，也不先编译全部依赖再失败；debug 构建与不需要密钥的日常 prebuild 不受影响。',
+    'gradle.taskGraph.whenReady { graph ->',
+    '    def ownfitReleaseTasks = graph.allTasks.findAll {',
+    '        (it.name.startsWith("assemble") || it.name.startsWith("bundle")) && it.name.contains("Release")',
+    '    }',
+    '    if (ownfitReleaseTasks.isEmpty()) return',
+    `    def guardPropsFile = rootProject.file("${PROPS_FILE}")`,
+    '    if (!guardPropsFile.exists()) {',
+    '        throw new GradleException("release 正式签名未配置：缺少 mobile/keystores/keystore.properties（内测分发包禁止 debug 签名）。生成与保管步骤见 mobile/keystores/README.md")',
+    '    }',
+    '    if (android.signingConfigs.findByName("ownfitRelease") == null) {',
+    '        throw new GradleException("release 正式签名未生效：keystore.properties 缺少必填字段或 storeFile 不存在。请核对 mobile/keystores/README.md（此错误不含密码信息）")',
     '    }',
     '}',
     '',

@@ -224,6 +224,9 @@ async function waitForTerminal(db, taskId, timeoutMs = 3000) {
 test('当次场景快照：演示温度不进输入；实时/手动温度带来源', async () => {
   const { close, store, demo } = await loadStore();
   try {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
     const snapshot = await store.loadSceneSnapshot();
     assert.deepEqual(plain(snapshot), { city: '北京', day: '明天', scene: '约会' });
 
@@ -232,7 +235,8 @@ test('当次场景快照：演示温度不进输入；实时/手动温度带来�
       temp: '10–15℃',
       weatherDesc: '小雨',
       weatherFetchedAt: new Date().toISOString(),
-      weatherTargetDate: '2026-11-04',
+      // 动态取今天：写死日期会让用例跨日失效（F4 校验正确行为的教训）
+      weatherTargetDate: today,
       weatherPlace: '北京',
     });
     const realSnapshot = await store.loadSceneSnapshot();
@@ -252,9 +256,9 @@ test('当次场景快照：演示温度不进输入；实时/手动温度带来�
 test('当次场景快照（F4）：错位/过期的实时温度不进推荐输入', async () => {
   const { close, store, demo } = await loadStore();
   try {
-    const now = new Date('2026-11-04T10:00:00');
+    const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    const today = '2026-11-04';
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
     // 地点错位：天气归属地 ≠ 当次城市
     demo.set({
       tempSource: 'real',
