@@ -34,7 +34,17 @@ prebuild 时 `plugins/withReleaseSigning.js` 会把 `ownfitReleaseSigning` 注�
 
 ```bash
 grep -n "ownfitReleaseSigning" mobile/android/app/build.gradle   # 应命中 2 处（定义 + release 引用）
+grep -n 'keystore.properties' mobile/android/app/build.gradle     # 路径应为 ../keystores/keystore.properties
 ```
+
+**路径勘误（F5，2026-11-04）**：properties 相对路径以 Android rootProject（`mobile/android`）
+为基准，正确值是 `../keystores/keystore.properties`（解析到本目录）。2026-11-04 之前生成的
+`android/` 目录注入的是 `../../`（会解析到仓库根导致静默回退 debug 签名），需重跑
+`expo prebuild -p android` 让插件升级注入（旧块会被自动修正路径并补校验）。
+
+**release 构建强制正式签名（F5）**：`assembleRelease`/`bundleRelease` 任务在缺
+`keystore.properties`、缺必填字段或 storeFile 不存在时会以不含密码的 GradleException
+直接失败，不再静默回退 debug 签名；`assembleDebug` 与日常 prebuild 不受影响。
 
 产物验签（确认不是 debug 签名）：
 
