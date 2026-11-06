@@ -7,3 +7,4 @@ pnpm install                          # 安装全部依赖
 pnpm typecheck                        # 全部包类型检查
 pnpm start                            # 启动 Expo 开发服务器（mobile）
 ```
+test
