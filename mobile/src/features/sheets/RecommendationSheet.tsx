@@ -46,6 +46,49 @@ const SLOT_LABELS: Record<string, string> = {
   accessory: '配饰',
 };
 
+/** 会话槽位名 → 服务层槽位（局部替换显示用） */
+const UI_SLOT_TO_ROLE: Record<string, string> = {
+  top: 'top',
+  dress: 'dress',
+  bottom: 'bottom',
+  shoes: 'shoes',
+  outer: 'outerwear',
+};
+
+/** 局部替换候选的替换说明：只换哪件、换成了什么（异步取名称；其余保持不变） */
+function ReplaceInfoLine({
+  stored,
+  candidate,
+}: {
+  stored: ReturnType<typeof parseRecommendationInputV2> & { mode: 'replace_slot'; targetSlot: string };
+  candidate: RecommendationCandidate;
+}) {
+  const [text, setText] = useState('');
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const slot = stored.targetSlot;
+      const label = SLOT_LABELS[UI_SLOT_TO_ROLE[slot] ?? slot] ?? slot;
+      const oldId = stored.baseline?.slots[slot] ?? null;
+      const newSlot = candidate.slots.find((s) => UI_SLOT_TO_ROLE[slot] === s.role);
+      const [oldItem, newItem] = await Promise.all([
+        oldId ? getItem(oldId) : Promise.resolve(null),
+        newSlot ? getItem(newSlot.itemId) : Promise.resolve(null),
+      ]);
+      if (active) {
+        setText(
+          `本次只换${label}：${oldItem?.name ?? '原件'} → ${newItem?.name ?? '替代件'}（其余单品与穿法保持不变）`,
+        );
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [stored, candidate]);
+  if (!text) return null;
+  return <Text style={styles.reason}>{text}</Text>;
+}
+
 /** 本地时区 yyyy-MM-dd HH:mm（finishedAt 是 UTC ISO） */
 function formatLocal(iso: string): string {
   const date = new Date(iso);
@@ -298,14 +341,22 @@ export function RecommendationSheet({
       );
     }
     if (t.status !== 'succeeded' || !t.candidates) return null;
+    const stored = parseRecommendationInputV2(t.inputJson);
+    const replaceSlot = stored?.mode === 'replace_slot' ? stored.targetSlot : null;
     return (
       <View>
         {t.candidates.map((candidate, index) => (
           <View key={`${index}-${candidate.wearStyle}`} style={styles.card}>
             <View style={styles.candidateHead}>
-              <Tag label={`候选 ${index + 1}`} />
+              <Tag label={replaceSlot ? `只换${SLOT_LABELS[UI_SLOT_TO_ROLE[replaceSlot] ?? ''] ?? ''}` : `候选 ${index + 1}`} />
               <Text style={styles.wearStyleText}>{candidate.wearStyle}</Text>
             </View>
+            {replaceSlot && stored ? (
+              <ReplaceInfoLine
+                stored={stored as typeof stored & { mode: 'replace_slot'; targetSlot: string }}
+                candidate={candidate}
+              />
+            ) : null}
             <View style={styles.slotRow}>
               {candidate.slots.map((slot) => (
                 <ItemThumb
@@ -422,30 +473,40 @@ export function RecommendationSheet({
           />
         </View>
       ) : null}
-      {task?.candidates?.map((candidate, index) => (
-        <View key={`${index}-${candidate.wearStyle}`} style={styles.card}>
-          <View style={styles.candidateHead}>
-            <Tag label={`候选 ${index + 1}`} />
-            <Text style={styles.wearStyleText}>{candidate.wearStyle}</Text>
-          </View>
-          <View style={styles.slotRow}>
-            {candidate.slots.map((slot) => (
-              <ItemThumb
-                key={`${slot.role}-${slot.itemId}`}
-                itemId={slot.itemId}
-                label={SLOT_LABELS[slot.role] ?? slot.role}
+      {(() => {
+        const stored = task ? parseRecommendationInputV2(task.inputJson) : null;
+        const replaceSlot = stored?.mode === 'replace_slot' ? stored.targetSlot : null;
+        return task?.candidates?.map((candidate, index) => (
+          <View key={`${index}-${candidate.wearStyle}`} style={styles.card}>
+            <View style={styles.candidateHead}>
+              <Tag label={replaceSlot ? `只换${SLOT_LABELS[UI_SLOT_TO_ROLE[replaceSlot] ?? ''] ?? ''}` : `候选 ${index + 1}`} />
+              <Text style={styles.wearStyleText}>{candidate.wearStyle}</Text>
+            </View>
+            {replaceSlot && stored ? (
+              <ReplaceInfoLine
+                stored={stored as typeof stored & { mode: 'replace_slot'; targetSlot: string }}
+                candidate={candidate}
               />
-            ))}
+            ) : null}
+            <View style={styles.slotRow}>
+              {candidate.slots.map((slot) => (
+                <ItemThumb
+                  key={`${slot.role}-${slot.itemId}`}
+                  itemId={slot.itemId}
+                  label={SLOT_LABELS[slot.role] ?? slot.role}
+                />
+              ))}
+            </View>
+            {candidate.reason ? <Text style={styles.reason}>{candidate.reason}</Text> : null}
+            <Button
+              variant="primary"
+              label="用这套搭配"
+              onPress={() => void adopt(candidate)}
+              style={styles.gap}
+            />
           </View>
-          {candidate.reason ? <Text style={styles.reason}>{candidate.reason}</Text> : null}
-          <Button
-            variant="primary"
-            label="用这套搭配"
-            onPress={() => void adopt(candidate)}
-            style={styles.gap}
-          />
-        </View>
-      ))}
+        ));
+      })()}
       {task && task.gaps.length > 0 ? <Notice>{`档案缺口：${task.gaps.join('；')}`}</Notice> : null}
       {task?.summary ? <Text style={styles.reason}>{task.summary}</Text> : null}
       {task &&

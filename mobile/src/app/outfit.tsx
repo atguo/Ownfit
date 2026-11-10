@@ -273,6 +273,11 @@ export default function OutfitScreen() {
           onPress={() => setPreviewOpen(true)}
         />
       </View>
+      <Button
+        variant="text"
+        label="AI 帮我搭一套（基于衣橱）"
+        onPress={() => setRecommendOpen(true)}
+      />
       <Text style={styles.underNote}>上身预览为 AI 生成示意图，非真实试穿</Text>
 
       <WearSheet visible={wearOpen} onClose={() => setWearOpen(false)} />

@@ -9,7 +9,7 @@ import { RecommendationSheet } from '../../features/sheets/RecommendationSheet';
 import { FeedbackSheet } from '../../features/sheets/FeedbackSheet';
 import { loadOutfitFrom } from '../../features/outfitSession';
 import type { WearStyle } from '@ownfit/contract';
-import { listPlans, type SavedPlan } from '../../data/repositories/planRepository';
+import { listPlans, deletePlan, type SavedPlan } from '../../data/repositories/planRepository';
 import { getItem } from '../../data/repositories/itemRepository';
 import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
 import { slotForCategory } from '../../features/outfitSession';
@@ -41,6 +41,28 @@ export default function OutfitsScreen() {
           ? p.wornState !== 'unworn'
           : true,
   );
+
+  /** 删除收藏的搭配（用户明确要求；plan_items 与该方案的穿着记录级联删除，不可恢复） */
+  function confirmDeletePlan(plan: SavedPlan) {
+    const label = plan.name ?? '这套搭配';
+    Alert.alert('删除这条搭配？', `"${label}" 将从收藏中删除，这套搭配的穿着与感受记录会一并删除，无法恢复。衣橱里的衣物不受影响。`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await deletePlan(plan.id);
+              setPlans(await listPlans());
+            } catch (error) {
+              Alert.alert('删除失败', error instanceof Error ? error.message : String(error));
+            }
+          })();
+        },
+      },
+    ]);
+  }
 
   async function reuse(plan: SavedPlan) {
     // 槽位按单品品类推导（与 startOutfitFrom 的规则一致；外套为独立槽位）
@@ -133,6 +155,7 @@ export default function OutfitsScreen() {
                   style={styles.cardButton}
                 />
               </View>
+              <Button variant="text" label="删除这条搭配…" onPress={() => confirmDeletePlan(plan)} />
             </View>
           </View>
         ))

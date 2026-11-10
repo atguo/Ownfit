@@ -160,7 +160,7 @@ export function WardrobeItemSheet({
       case 'succeeded':
         return view.lastValidResult
           ? `上次分析完成（${formatTime(view.lastValidResult.completedAt)}，模型：${view.lastValidResult.modelName}）`
-          : '照片不够清楚，建议换成更清晰的单品照后再试';
+          : '照片不够清楚（AI 未能确定照片里是单件衣物）。建议：单件平铺或悬挂、光线充足、背景干净，重拍后再分析';
       case 'failed':
         return task.errorSummary ? `上次分析失败：${task.errorSummary}` : '上次分析失败，可重试';
       case 'interrupted':
@@ -182,7 +182,7 @@ export function WardrobeItemSheet({
     if (!item) return;
     await updateItemBasics(item.id, { name, category: category ?? undefined });
     onChanged();
-    toast('已保存');
+    toast('已保存名称与品类');
   }
 
   /** 采纳 AI 名称建议：写入单品名称并同步名称输入框（不同步的话“保存修改”会用旧名覆盖） */
@@ -453,7 +453,13 @@ export function WardrobeItemSheet({
           ) : (
             <>
               <Button variant="primary" label="围绕这件搭配" onPress={() => item && onUse(item.id)} />
-              <Button variant="secondary" label="保存修改" onPress={saveBasics} style={styles.gap} />
+              <Text style={styles.sourceNote}>
+                从衣橱自动补齐一套（本机组合，不调用 AI）；想让 AI 推荐，进搭配后点「AI 帮我搭一套」。
+              </Text>
+              <Button variant="secondary" label="保存名称与品类" onPress={saveBasics} style={styles.gap} />
+              <Text style={styles.sourceNote}>
+                只有名称与品类需要点保存；下方描述、测量的增删改都是即时生效。
+              </Text>
             </>
           )}
 
@@ -544,6 +550,44 @@ export function WardrobeItemSheet({
                   onDelete={() => void removeAttribute(attribute.name)}
                 />
               ))}
+
+              {/* 手动添加描述：即录即存（user_entered），不依赖上方"保存名称与品类" */}
+              {newAttr ? (
+                <View style={styles.addAttrForm}>
+                  <Field label="描述名">
+                    <TextField
+                      value={newAttr.name}
+                      onChangeText={(text) => setNewAttr({ ...newAttr, name: text })}
+                      placeholder="如：面料 / 适合场合"
+                      maxLength={20}
+                    />
+                  </Field>
+                  <Field label="描述内容">
+                    <TextField
+                      value={newAttr.value}
+                      onChangeText={(text) => setNewAttr({ ...newAttr, value: text })}
+                      placeholder="如：纯棉 / 通勤面试都合适"
+                      maxLength={60}
+                    />
+                  </Field>
+                  <View style={styles.chipRow}>
+                    <Button
+                      variant="secondary"
+                      label="添加这条描述"
+                      disabled={!newAttr.name.trim() || !newAttr.value.trim()}
+                      onPress={() => void addCustomAttribute()}
+                    />
+                    <Button variant="text" label="取消" onPress={() => setNewAttr(null)} />
+                  </View>
+                </View>
+              ) : (
+                <Button
+                  variant="text"
+                  label="+ 手动添加一条描述"
+                  onPress={() => setNewAttr({ name: '', value: '' })}
+                  style={styles.gap}
+                />
+              )}
 
               {/* 测量区：替代静态"未填写" */}
               <Text style={styles.sectionTitle}>实测尺寸</Text>
@@ -758,6 +802,9 @@ const styles = StyleSheet.create({
   },
   amountInput: {
     flex: 1,
+  },
+  addAttrForm: {
+    marginTop: 6,
   },
   gap: {
     alignSelf: 'stretch',
