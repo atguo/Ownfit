@@ -63,6 +63,23 @@ grep -n 'keystore.properties' mobile/android/app/build.gradle     # 路径应为
 （实测无材料时 17 秒失败，早于依赖编译与 JS 打包），不再静默回退 debug 签名；
 `assembleDebug` 与日常 prebuild 不受影响。
 
+### 本机走查包（app-release-walkthrough.apk，不可分发）
+
+2026-11-10：手机上原有 0.1.0 debug 安装，与本仓库 `mobile/android/app/debug.keystore` 同签名（指纹一致），
+正式签名包无法覆盖安装（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）。为保留本机资料做真机走查，
+用同一 debug key 将 release 构建重签为 `app-release-walkthrough.apk`（`apksigner sign --ks app/debug.keystore
+--ks-pass pass:android --key-pass pass:android --out ...`）后 `pm install -r` 装机成功。
+
+- **定位：仅供开发者本机走查，不是交付物；严禁分发**（分发件只有正式签名的 `app-release.apk`）。
+- 后续决策（项目用户）：本机长期用走查包，或择期卸载一次换装正式签名包（卸载=清空本机衣橱资料，无云备份）。
+
+### 安装与 adb 的 Git Bash 路径坑（2026-11-10 实测）
+
+`adb push/pull/shell` 的**设备端路径**同样会被 MSYS2 改写（`/data/local/tmp/...` → `D:/Git/data/...`），
+导致推送"成功"但文件不在设备上、pm install 静默失败。解决：命令前加 `export MSYS_NO_PATHCONV=1`，
+或整条命令走 `cmd /c`。无线传输 119MB 建议先 `adb push` 到 `/data/local/tmp/` 再 `pm install -r`，
+流式 `adb install` 容易断流。
+
 ### 已完成的首次正式构建记录（2026-11-10）
 
 - 产物：`mobile/android/app/build/outputs/apk/release/app-release.apk`，119,376,219 字节（含 4 ABI 原生库）。
