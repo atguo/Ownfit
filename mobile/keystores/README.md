@@ -25,12 +25,18 @@ keyPassword=<同一密码>
 ## 构建（构建机执行）
 
 ```bash
+# 本项目需要 node >= 18（SDK 58；项目默认高版本 node）。
+# 本机用 nvm 切换：16.20.1 是为其他项目临时切的，构建前切回 22（需要管理员终端）：
+nvm use 22.14.0
+node -v   # 应显示 v22.14.0
 pnpm --filter @ownfit/mobile exec expo prebuild -p android
-# JS 打包（Metro）需要 node >= 18：本机默认 PATH 的 node 16 会让 createBundleReleaseJsAndAssets
-# 失败（exit 7）。构建时把 node 24 前置到 PATH（2026-11-05 预检确认的机器事实）：
-export PATH="/c/Users/Admin/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH"
 cd mobile/android && ./gradlew assembleRelease
+# 构建完成后如需还原其他项目环境：nvm use 16.20.1
 ```
+
+> 兜底：若不便切 nvm（或 nvm 不可用），也可把任意 ≥18 的 node 前置到 PATH，
+> 例如 `export PATH="/c/Users/Admin/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH"`（node 24）。
+> 2026-11-05 实测：默认 node 16 下 release JS 打包失败（`createBundleReleaseJsAndAssets` exit 7）。
 
 prebuild 时 `plugins/withReleaseSigning.js` 会把 `ownfitReleaseSigning` 注入
 `android/app/build.gradle` 的 release 构建型。注入核验：
