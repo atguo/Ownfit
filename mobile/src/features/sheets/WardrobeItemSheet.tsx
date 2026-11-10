@@ -312,6 +312,30 @@ export function WardrobeItemSheet({
     }
   }
 
+  /** 编辑一条已有描述的值（保留行身份；来源不变——人工行保持人工，AI 行经编辑视为已确认） */
+  async function saveEditedAttribute() {
+    if (!item || !attrEditing) return;
+    const value = attrEditing.value.trim();
+    if (!value) {
+      toast('描述内容不能为空');
+      return;
+    }
+    const current = analysis?.attributes.find((a) => a.name === attrEditing.name);
+    const sourceType = current && current.source === 'user_entered' ? 'user_entered' : 'user_confirmed';
+    await recordUserAttribute({
+      itemId: item.id,
+      field: attrEditing.name,
+      value,
+      sourceType,
+      sourceRef: '详情编辑描述',
+    });
+    setAttrEditing(null);
+    await loadAnalysis(item.id);
+    notifyAnalysisChanged();
+    onChanged();
+    toast('已更新');
+  }
+
   /** 删除一条属性行（物理删除 + revision 递增） */
   async function removeAttribute(name: string) {
     if (!item) return;
@@ -454,7 +478,7 @@ export function WardrobeItemSheet({
             <>
               <Button variant="primary" label="围绕这件搭配" onPress={() => item && onUse(item.id)} />
               <Text style={styles.sourceNote}>
-                从衣橱自动补齐一套（本机组合，不调用 AI）；想让 AI 推荐，进搭配后点「AI 帮我搭一套」。
+                以这件为核心进入搭配，并让 AI 结合你的衣橱给出推荐；进入后也可手动调整。
               </Text>
               <Button variant="secondary" label="保存名称与品类" onPress={saveBasics} style={styles.gap} />
               <Text style={styles.sourceNote}>
@@ -540,6 +564,27 @@ export function WardrobeItemSheet({
                   style={styles.gap}
                 />
               ) : null}
+              {attrEditing ? (
+                <View style={styles.addAttrForm}>
+                  <Field label={`编辑「${attrEditing.name}」`}>
+                    <TextField
+                      value={attrEditing.value}
+                      onChangeText={(text) => setAttrEditing({ ...attrEditing, value: text })}
+                      placeholder="修改描述内容"
+                      maxLength={60}
+                    />
+                  </Field>
+                  <View style={styles.chipRow}>
+                    <Button
+                      variant="secondary"
+                      label="保存这条描述"
+                      disabled={!attrEditing.value.trim()}
+                      onPress={() => void saveEditedAttribute()}
+                    />
+                    <Button variant="text" label="取消" onPress={() => setAttrEditing(null)} />
+                  </View>
+                </View>
+              ) : null}
               {analysis.attributes.map((attribute) => (
                 <AttributeRowView
                   key={attribute.name}
@@ -548,6 +593,7 @@ export function WardrobeItemSheet({
                     void confirmAttribute(attribute.name, attribute.value).then(() => undefined)
                   }
                   onDelete={() => void removeAttribute(attribute.name)}
+                  onEdit={() => setAttrEditing({ name: attribute.name, value: attribute.value })}
                 />
               ))}
 
@@ -629,10 +675,12 @@ function AttributeRowView({
   attribute,
   onConfirm,
   onDelete,
+  onEdit,
 }: {
   attribute: DynamicAttribute;
   onConfirm: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
   const badge = sourceBadge(attribute.source);
   return (
@@ -645,6 +693,7 @@ function AttributeRowView({
       {attribute.source === 'ai_inferred' ? (
         <Button variant="chip" label="确认" onPress={onConfirm} />
       ) : null}
+      <Button variant="chip" label="编辑" onPress={onEdit} />
       <Button variant="chip" label="删除" onPress={onDelete} />
     </View>
   );

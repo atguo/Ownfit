@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocalSearchParams } from 'expo-router';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Page } from '../ui/Screen';
@@ -57,6 +58,16 @@ export default function OutfitScreen() {
   const router = useRouter();
   const toast = useToast();
   const session = useOutfitSession();
+  // 「围绕这件搭配」从衣橱详情带 recommend=1 进入：自动打开 AI 推荐面板（只开一次）
+  const { recommend } = useLocalSearchParams<{ recommend?: string }>();
+  const recommendAutoOpened = useRef(false);
+  useEffect(() => {
+    if (recommend === '1' && !recommendAutoOpened.current) {
+      recommendAutoOpened.current = true;
+      setRecommendOpen(true);
+      router.setParams({ recommend: undefined });
+    }
+  }, [recommend, router]);
   const [slotViews, setSlotViews] = useState<Record<string, SlotView>>({});
   const [wearOpen, setWearOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
@@ -259,18 +270,21 @@ export default function OutfitScreen() {
         </View>
       </View>
 
+      {/* 上身预览是核心能力：显眼的带文字按钮，与保存并排 */}
       <View style={styles.actions}>
+        <Button
+          variant="secondary"
+          icon="spark"
+          label="上身预览"
+          onPress={() => setPreviewOpen(true)}
+          style={styles.actionButton}
+        />
         <Button
           variant="primary"
           icon="bookmark"
           label="保存这套搭配"
           onPress={save}
-        />
-        <Button
-          variant="secondary"
-          icon="spark"
-          accessibilityLabel="上身预览"
-          onPress={() => setPreviewOpen(true)}
+          style={styles.actionButton}
         />
       </View>
       <Button
@@ -396,6 +410,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 9,
     marginTop: 17,
+  },
+  actionButton: {
+    flex: 1,
   },
   underNote: {
     textAlign: 'center',

@@ -260,8 +260,10 @@ export default function WardrobeScreen() {
           void load();
         }}
         onUse={(id) => {
+          // 用户意图（批次 4 走查反馈）：选定核心单品 → 进入搭配并让 AI 围绕它推荐。
+          // recommend 参数由搭配页读取后自动打开 AI 推荐面板（不自动发起付费生成）。
           void startOutfitFrom(id).then((ok) => {
-            if (ok) router.push('/outfit');
+            if (ok) router.push({ pathname: '/outfit', params: { recommend: '1' } });
           });
         }}
       />
