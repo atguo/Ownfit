@@ -1,15 +1,20 @@
 本目录属于“衣见”（Ownfit）项目。协作约束、架构边界与同步义务以仓库根目录 [AGENTS.md](../AGENTS.md) 为准；实施顺序与验收见 [docs/开发计划.md](../docs/开发计划.md)。
 
-## 当前结构（2026-11-03 核对，M6 批次 1 后更新）
+## 当前结构（2026-11-13 结构收敛后更新）
 
-M0–M5 完成（M5 视同验收）；M6 进行中：批次 1（M5 登记缺口收尾）已实现并经项目用户真机走查通过（2026-11-03）；批次 2 五项 M6 前决定已确认并落地，批次 3 本地部分（签名插件、版本号）完成，keystore 生成/构建/验签待构建机。详见 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md)。下文带日期记录保留历史语境，不以历史“0 次调用/待验收”覆盖后续证据。
+M0–M5 完成（M5 视同验收）；M6 进行中：批次 1/2 已收口，批次 3 于 2026-11-10 release 构建验签与走查包装机完成（正式包真机走查待项目用户），批次 4/5 未收口。详见 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md)。下文带日期记录保留历史语境，不以历史“0 次调用/待验收”覆盖后续证据。
 
 - `src/app/`：根 Stack + `(tabs)/` 四主入口 + `choose`、`outfit`、`add` + `ai/config`、`ai/config-edit` + `dev/components`、`dev/data-tools`。预览为 `PreviewSheet` 弹层，当前没有独立 `preview.tsx` 路由。
 - `src/ui/`：设计令牌、图标、响应式页面容器与原生组件，真实搭配板为 `RealOutfitBoard`。
-- `src/data/`：SQLCipher schema v6、密钥管理与 user_version 迁移；repositories 包含衣物/照片/属性/方案/分析任务/预览/推荐/维护/设置（含长期偏好、场景默认、身材资料 body-profile）/颜色库。照片、人物参考和生成图保存在应用私有目录。
-- `src/services/`：AI 配置、协议客户端及分析/预览/推荐执行器；`weather.ts` 提供可选城市天气查询，`location.ts` 提供定位。非敏感 AI 配置存本地库 `ai_configs` 表（v6，DB 为源 + 内存镜像），API Key 仍只在设备安全存储；服务地址仅接受 https（M6 批次 2 明文收敛）。
-- `src/features/`：`outfitSession` 编辑会话（含会话来源 origin：manual/ai），分析/预览/推荐 store，`weatherAuto` 自动天气编排，`sheets/` 原生弹层。`demoStore` 承载当次场景等内存上下文；推荐已消费该当次场景（含温度来源区分，演示温度不进 AI）。
+- `src/domain/`：**业务规则唯一出处（2026-11-13 启用）**——`outfitRules.ts`（槽位映射、必需槽位组合、有效逐件穿法、缺口表达、会话→契约 Plan 构造，纯函数无副作用）、`categories.ts`（品类类型与全集）。不依赖 react 与 repository。
+- `src/data/`：SQLCipher schema v8、密钥管理与 user_version 迁移；repositories 包含衣物/照片/属性/方案/分析任务/预览（含核对/后处理/产物）/推荐/维护/设置（含长期偏好、场景默认、身材资料 body-profile）/颜色库。照片、人物参考和生成图保存在应用私有目录。
+- `src/services/`：`ai/clients/`（openaiClient、minimaxClient、testConnection 协议客户端）、`ai/runners/`（分析/预览/推荐三个任务执行器）、`ai/` 根（配置镜像 configStore、视觉路由 visionConfig、输入快照与归一化、提示词与解析、预览核对）——2026-11-13 分组归位，新代码按此落点；`weather.ts` 提供可选城市天气查询，`location.ts` 提供定位。非敏感 AI 配置存本地库 `ai_configs` 表（DB 为源 + 内存镜像），API Key 仍只在设备安全存储；服务地址仅接受 https（M6 批次 2 明文收敛）。
+- `src/features/`：`outfitSession` 会话状态胶水（撤销栈、订阅与锁定/替换/穿法操作；槽位与契约构造等纯规则已移 `domain/outfitRules.ts`，会话来源 origin：manual/ai），分析/预览/推荐 store，`weatherAuto` 自动天气编排，`sheets/` 原生弹层。`demoStore` 承载当次场景等内存上下文；推荐已消费该当次场景（含温度来源区分，演示温度不进 AI）。
 - `plugins/`：Expo 配置插件（`withReleaseSigning.js` 注入 release 正式签名，经 prebuild 生效）；`keystores/`（git 忽略，README 入库）存放构建机本机的签名材料。
+
+### 结构收敛（2026-11-13，Agent 化改造前置）
+
+按架构评审建议完成两项结构收敛（不改任何业务行为）：①`services/ai` 按 clients（协议客户端）/ runners（三个任务执行器）/ 根（配置与编排）分组归位，28 处导入路径与测试 stub 键、loader 路径同步更新；②`features/outfitSession.ts` 中无副作用的领域规则（槽位映射、必需槽位、有效穿法、缺口、会话→契约构造）移入新建的 `src/domain/outfitRules.ts`（`buildContractPlan` 在 features 保留读全局态的薄包装，页面与测试调用签名不变），`ItemCategory` 类型与 `categories` 全集自 `data/demo.ts` 移入 `src/domain/categories.ts`（demo 不再定义业务类型）。验证：`pnpm typecheck` 通过、mobile 回归 167/167 通过。归档文档（docs/plans/archive/）中的历史路径按存档规则不更新。
 
 ## 命令
 
@@ -31,7 +36,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 - `photoRepository.getMainPhotoForAnalysis(itemId)`：按 `items.main_photo_id` 解析稳定分析输入，删除后返回 null；`readAnalysisImage(itemId)` 校验文件后返回内存 data URL（不返回 file URI）。
 - 事务统一使用同一连接事务（`withTransactionAsync`）；**禁止** `withExclusiveTransactionAsync`（会新建未带 SQLCipher 密钥的连接）。理由见根 AGENTS 与 [分批执行手册](../docs/plans/archive/衣物AI分析/2026-10-29-衣物AI分析-分批执行手册.md) D4。
 - AI 服务层（P4，假网络验证，未真实调用）：`types.ts` 增 `callRevision`/`isVisionCandidate`；`configStore` 增 `loadConfigsStructured`；新增 `services/ai/visionConfig.ts`（视觉配置路由 ready/choose/missing/invalid）与 `services/ai/garmentAnalysis.ts`（分析提示词、单张图片请求、严格 JSON 解析、`鞋`→`鞋履` 适配、契约校验）。`openaiClient.chatCompletion` 追加第 5 个参数 `options{maxTokens,signal}`（前四参数与顺序不变）。
-- 任务执行（P5）：`services/ai/garmentTaskRunner.ts`（依赖注入的串行执行器，`enqueueGarmentAnalysis`/`buildInputKey`/`createDefaultGarmentTaskRunnerDeps`；启动恢复、前后台门控、尽力中止、本地提交重试）与 `features/garmentAnalysisStore.ts`（`subscribeAnalysisChanges`/`notifyAnalysisChanged`、会话批次、`requestKeyFor`）。
+- 任务执行（P5）：`services/ai/runners/garmentTaskRunner.ts`（依赖注入的串行执行器，`enqueueGarmentAnalysis`/`buildInputKey`/`createDefaultGarmentTaskRunnerDeps`；启动恢复、前后台门控、尽力中止、本地提交重试）与 `features/garmentAnalysisStore.ts`（`subscribeAnalysisChanges`/`notifyAnalysisChanged`、会话批次、`requestKeyFor`）。
 - 页面接入（P6）：`app/_layout.tsx` 挂载执行器单例与 AppState 门控；`app/add.tsx` 保存后自动入队、模型提示与选择、AI 建议预填；`app/ai/config.tsx` 可设分析默认模型；`features/sheets/VisionModelSheet.tsx` 新增。
 - 历史衣物与详情（P7）：`app/(tabs)/wardrobe.tsx` 增批量补分析入口与卡片分析状态；`features/sheets/WardrobeItemSheet.tsx` 增分析状态、逐字段修正、明确确认入口（每个未确认字段旁的“确认”按钮 + 顶部“确认全部分析结果（N 项）”，写入 `user_confirmed`、只落本机不重跑模型）、分析与重试、重试保存；`attributeRepository.recordUserAttribute` 递增 `items.revision`。
 - 尚未真机验收（P8 待执行）；真实模型调用 0 次。回归：`node --test mobile/tests/*.test.cjs`。
@@ -58,7 +63,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 ### M5 轨 A 上身预览（2026-10-30 实现完成，真机验证进行中）
 
 - `data/repositories/previewRepository.ts`：人物参考（压缩落盘 + preferences 记录含自愈：文件在记录缺失时按 mtime 重建）；预览任务 CRUD（kind='try_on_preview'，item_id=basis、photo_id='none'，输入指纹=单品集+穿法+参考版本+配置）、`savePreviewResultImage`（下载落盘 files/previews/）。
-- `services/ai/previewTaskRunner.ts`：串行执行器（与 garmentTaskRunner 同语义：发送前写 running、启动恢复标 interrupted 不重发、异常兜底不留 running）；`services/ai/visionConfig.ts` 增 `resolveImageGenConfig`（minimax+image_gen，默认失效不静默切换）。
+- `services/ai/runners/previewTaskRunner.ts`：串行执行器（与 garmentTaskRunner 同语义：发送前写 running、启动恢复标 interrupted 不重发、异常兜底不留 running）；`services/ai/visionConfig.ts` 增 `resolveImageGenConfig`（minimax+image_gen，默认失效不静默切换）。
 - `features/previewStore.ts`（单例/入队/订阅）与 `features/sheets/PreviewSheet.tsx`（状态/结果/重试/历史与本方案标注、诚实文案）接通 outfit 页星形按钮。
 - schema v4：活动任务唯一索引改 (kind, item_id, input_key)（原来只按 item_id 会跨类型互相阻塞）。
 - preferences 共享表纪律：偏好项 id 必须 `pref-` 前缀（settingsRepository 读取/保存按前缀过滤）；其他用途（color-library、preview-reference）避开该前缀。

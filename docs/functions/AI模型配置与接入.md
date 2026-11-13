@@ -80,7 +80,7 @@
 
 - 路由与配置版本：`services/ai/visionConfig.ts`、`types.ts` 的 `callRevision`、`configStore` 的结构化读取；"模型配置"页可把某条视觉配置设为衣物分析默认模型。
 - 调用与解析：`services/ai/garmentAnalysis.ts`（提示词版本 `1`、单张照片 data URL、2048/90000、严格解析、`鞋`→`鞋履` 适配）；`openaiClient.chatCompletion` 追加 `options{maxTokens,signal}` 并区分 timeout/cancelled，连接测试仍为 16/30000。
-- 任务执行：`services/ai/garmentTaskRunner.ts` 串行执行器（启动恢复、前后台门控、配置变更 blocked、归档/删除时尽力中止、结果已拿到但本地保存失败只重试本地提交）。
+- 任务执行：`services/ai/runners/garmentTaskRunner.ts` 串行执行器（启动恢复、前后台门控、配置变更 blocked、归档/删除时尽力中止、结果已拿到但本地保存失败只重试本地提交）。
 - 验证边界：全部自动回归使用假客户端，**真实模型调用次数为 0**；真实接口的兼容性、超时与取消行为、模型输出质量均未验证。
 
 ### S4 迁移标记与密钥换绑（2026-11-04 实现完成，待真机走查）
