@@ -468,7 +468,7 @@ async function setupRunner(options = {}) {
     attributes: load(path.join(SRC, 'data/repositories/attributeRepository.ts')),
     photos: load(path.join(SRC, 'data/repositories/photoRepository.ts')),
   };
-  const runnerModule = load(path.join(SRC, 'services/ai/garmentTaskRunner.ts'));
+  const runnerModule = load(path.join(SRC, 'services/ai/runners/garmentTaskRunner.ts'));
   const configs = new Map();
   if (options.config) configs.set(options.config.id, options.config);
 

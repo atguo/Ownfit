@@ -7,17 +7,17 @@
 // 边界：恢复记录 ≠ 恢复计算进度；启动恢复把遗留 running 任务与 checking/correcting
 // 后处理标 interrupted（结果未知，不悄悄再付费）；不自动重发。
 
-import { callRevisionOf, type ModelConfig } from './types';
-import { buildCorrections, checkerSystemPrompt, checkerUserPrompt, parseCheckerContent, type CheckerConstraintItem } from './previewChecker';
+import { callRevisionOf, type ModelConfig } from '../types';
+import { buildCorrections, checkerSystemPrompt, checkerUserPrompt, parseCheckerContent, type CheckerConstraintItem } from '../previewChecker';
 import {
   getPreviewTask,
   listPreviewTasksByStatus,
   type PreviewTask,
   type PreviewTaskStatus,
-} from '../../data/repositories/previewRepository';
-import type { PreviewItemVerdict, PreviewCheckOverall } from '../../data/repositories/previewCheckRepository';
-import type { PreviewPostProcessRecord, PreviewPostProcessStage } from '../../data/repositories/previewPostprocessRepository';
-import type { CommittedArtifact, CommitArtifactResult, PreviewArtifact } from '../../data/repositories/previewRepository';
+} from '../../../data/repositories/previewRepository';
+import type { PreviewItemVerdict, PreviewCheckOverall } from '../../../data/repositories/previewCheckRepository';
+import type { PreviewPostProcessRecord, PreviewPostProcessStage } from '../../../data/repositories/previewPostprocessRepository';
+import type { CommittedArtifact, CommitArtifactResult, PreviewArtifact } from '../../../data/repositories/previewRepository';
 
 export interface PreviewSlotItem {
   itemId: string;

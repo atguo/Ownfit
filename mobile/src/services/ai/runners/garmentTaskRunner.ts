@@ -17,29 +17,29 @@ import {
   updateTaskStatus,
   type CreateGarmentTaskInput,
   type TaskStatusPatch,
-} from '../../data/repositories/taskRepository';
+} from '../../../data/repositories/taskRepository';
 import {
   GARMENT_ANALYSIS_KIND,
   type AnalysisTask,
   type AnalysisTaskStatus,
   type AnalysisTrigger,
   type RejectReason,
-} from '../../data/repositories/analysisTypes';
-import { getItem, type WardrobeItem } from '../../data/repositories/itemRepository';
+} from '../../../data/repositories/analysisTypes';
+import { getItem, type WardrobeItem } from '../../../data/repositories/itemRepository';
 import {
   getMainPhotoForAnalysis,
   readAnalysisImage,
   type AnalysisImageResult,
-} from '../../data/repositories/photoRepository';
-import { commitGarmentAnalysis, type AnalysisCommitResult } from '../../data/repositories/attributeRepository';
-import { getApiKey, getConfig } from './configStore';
-import { resolveVisionConfig, type ConfigResolution } from './visionConfig';
+} from '../../../data/repositories/photoRepository';
+import { commitGarmentAnalysis, type AnalysisCommitResult } from '../../../data/repositories/attributeRepository';
+import { getApiKey, getConfig } from '../configStore';
+import { resolveVisionConfig, type ConfigResolution } from '../visionConfig';
 import {
   GARMENT_PROMPT_VERSION,
   runGarmentAnalysis,
   type AnalysisRunResult,
-} from './garmentAnalysis';
-import { callRevisionOf, type ModelConfig } from './types';
+} from '../garmentAnalysis';
+import { callRevisionOf, type ModelConfig } from '../types';
 
 /** 配置快照：只含白名单字段，绝不含 Key 或 keyRef */
 export interface ConfigSnapshot {

@@ -7,7 +7,7 @@
 
 import { getConfig, getApiKey } from '../services/ai/configStore';
 import { resolveTextConfig, type ConfigResolution } from '../services/ai/visionConfig';
-import { createRecommendationTaskRunner, type RecommendationRunner } from '../services/ai/recommendationTaskRunner';
+import { createRecommendationTaskRunner, type RecommendationRunner } from '../services/ai/runners/recommendationTaskRunner';
 import {
   RECOMMENDATION_CONTRACT_VERSION,
   RECOMMENDATION_PROMPT_VERSION,

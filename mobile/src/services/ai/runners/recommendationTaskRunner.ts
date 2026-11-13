@@ -7,9 +7,9 @@
 // 资料版本，不满足标 stale 并保留原请求；局部替换候选按允许变化范围本地校验（F8）。
 // 历史兼容：无 V2 快照的旧 queued 请求标 stale（不自动重发）；旧 running 由启动恢复标 interrupted。
 
-import { getConfig, getApiKey } from './configStore';
-import { callRevisionOf, type ModelConfig } from './types';
-import { chatCompletion } from './openaiClient';
+import { getConfig, getApiKey } from '../configStore';
+import { callRevisionOf, type ModelConfig } from '../types';
+import { chatCompletion } from '../clients/openaiClient';
 import {
   categoryToSlotRole,
   normalizeRecommendation,
@@ -19,13 +19,13 @@ import {
   RECOMMENDATION_PROMPT_VERSION,
   type ProfileItem,
   type SlotRole,
-} from './recommendationService';
+} from '../recommendationService';
 import {
   aliasMapOf,
   parseRecommendationInputV2,
   type RecommendationInputV2,
   type ReplacementRule,
-} from './recommendationInput';
+} from '../recommendationInput';
 import {
   commitRecommendationResult,
   getRecommendationTask,
@@ -33,7 +33,7 @@ import {
   updateRecommendationTaskStatus,
   type RecommendationTask,
   type RecommendationTaskStatus,
-} from '../../data/repositories/recommendationRepository';
+} from '../../../data/repositories/recommendationRepository';
 
 export interface RecommendationRunnerDeps {
   listQueued(): Promise<RecommendationTask[]>;

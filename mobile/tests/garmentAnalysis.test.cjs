@@ -395,7 +395,7 @@ test('分析请求：只有一件照片、参数为 40960、用 data URL 而不�
 
 test('连接测试仍使用 16 个 token（与分析的 2048 区分）', async () => {
   const { ai, fetch } = await setup({ handler: () => okResponse('hi') });
-  const chat = await ai('openaiClient').chatCompletion(
+  const chat = await ai('clients/openaiClient').chatCompletion(
     { urlKind: 'openai', baseUrl: 'https://api.example.com/v1', modelId: 'glm-4v' },
     'sk-test',
     [{ role: 'user', content: 'hi' }],
@@ -524,7 +524,7 @@ test('空内容：HTTP 200 但无内容按分析失败处理（连接测试仍�
   assert.equal(analysis.ok, false);
   assert.equal(analysis.error.kind, 'empty');
 
-  const connection = await empty.ai('openaiClient').chatCompletion(
+  const connection = await empty.ai('clients/openaiClient').chatCompletion(
     { urlKind: 'openai', baseUrl: 'https://api.example.com/v1', modelId: 'm' },
     'sk',
     [{ role: 'user', content: 'hi' }],

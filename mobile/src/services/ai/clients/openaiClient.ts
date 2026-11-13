@@ -1,7 +1,7 @@
 // OpenAI 兼容 chat completions 客户端（RN 版，与 A 线实验脚本同协议同错误分类）。
 // 只调用用户配置的接口：endpoint 由 urlKind 拼接规则生成。
 
-import { endpointFor, type ModelConfig } from './types';
+import { endpointFor, type ModelConfig } from '../types';
 
 export interface ChatResult {
   ok: boolean;

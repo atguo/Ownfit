@@ -9,7 +9,7 @@ import {
   type GarmentAnalysis,
   type GarmentCategory,
 } from '@ownfit/contract';
-import { chatCompletion } from './openaiClient';
+import { chatCompletion } from './clients/openaiClient';
 import type { ModelConfig } from './types';
 
 /** 提示词版本：随提示词或解析约定的变化递增，用于任务记录的 prompt_version */

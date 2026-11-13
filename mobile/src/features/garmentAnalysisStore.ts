@@ -9,7 +9,7 @@ import {
   createDefaultGarmentTaskRunnerDeps,
   createGarmentTaskRunner,
   type GarmentTaskRunner,
-} from '../services/ai/garmentTaskRunner';
+} from '../services/ai/runners/garmentTaskRunner';
 import { resolveVisionConfig, type ConfigResolution } from '../services/ai/visionConfig';
 
 export type AnalysisChangeListener = () => void;

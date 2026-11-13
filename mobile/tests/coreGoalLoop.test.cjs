@@ -23,7 +23,7 @@ const { createLoader, SRC } = require('./garmentTasks.test.cjs');
 
 const CONTRACT_ENTRY = path.resolve(__dirname, '../../packages/contract/src/index.ts');
 const SERVICE = path.join(SRC, 'services/ai/recommendationService.ts');
-const PREVIEW_RUNNER = path.join(SRC, 'services/ai/previewTaskRunner.ts');
+const PREVIEW_RUNNER = path.join(SRC, 'services/ai/runners/previewTaskRunner.ts');
 const PREVIEW_CHECKER = path.join(SRC, 'services/ai/previewChecker.ts');
 const GARMENT_VIEW = path.join(SRC, 'services/ai/garmentView.ts');
 const RECOMMENDATION_REPO = path.join(SRC, 'data/repositories/recommendationRepository.ts');

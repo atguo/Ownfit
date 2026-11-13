@@ -159,7 +159,7 @@ async function setup() {
   const postprocess = load(path.join(SRC, 'data/repositories/previewPostprocessRepository.ts'));
   const recommendation = load(path.join(SRC, 'data/repositories/recommendationRepository.ts'));
   const settings = load(path.join(SRC, 'data/repositories/settingsRepository.ts'));
-  const runnerModule = load(path.join(SRC, 'services/ai/previewTaskRunner.ts'));
+  const runnerModule = load(path.join(SRC, 'services/ai/runners/previewTaskRunner.ts'));
   const config = {
     id: 'cfg-img',
     name: 'MiniMax 图像',

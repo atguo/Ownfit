@@ -1,7 +1,7 @@
 // MiniMax 图像生成客户端（自有协议 /v1/image_generation，RN 版）。
 // 约束：subject_reference 仅支持人物肖像；生成图 URL 24h 失效。
 
-import { endpointFor, type ModelConfig } from './types';
+import { endpointFor, type ModelConfig } from '../types';
 
 export interface ImageGenResult {
   ok: boolean;

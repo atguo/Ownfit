@@ -24,7 +24,7 @@ export interface ProfileItem {
   revision?: number;
 }
 
-/** 穿法白名单（与 features/outfitSession 的 WearStyle 保持一致；services 层不反向依赖 UI 层） */
+/** 穿法白名单（与 domain/outfitRules 的 WearStyle 语义保持一致；services 层不反向依赖 UI 层） */
 export const WEAR_STYLE_VALUES = ['自然垂放', '前侧塞衣角', '外层敞开穿'] as const;
 
 export const ROLE_VALUES = ['top', 'bottom', 'dress', 'shoes', 'outerwear', 'bag', 'accessory'] as const;
@@ -88,7 +88,7 @@ export function profileLines(items: ProfileItem[]): string[] {
   });
 }
 
-/** 品类 → 组合槽位（服务层槽位名；与 features/outfitSession 的 slotForCategory 同语义，
+/** 品类 → 组合槽位（服务层槽位名；与 domain/outfitRules 的 slotForCategory 同语义（2026-11-13 起），
  * 外套在服务层称 outerwear。无法映射的品类（包/配饰）返回 null）。 */
 export function categoryToSlotRole(category: string | null): SlotRole | null {
   switch (category) {

@@ -15,7 +15,7 @@ import {
   updateConfig,
   updateTestResult,
 } from '../../services/ai/configStore';
-import { testConnection } from '../../services/ai/testConnection';
+import { testConnection } from '../../services/ai/clients/testConnection';
 import {
   capabilityLabels,
   insecureUrlProblem,

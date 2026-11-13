@@ -2,10 +2,10 @@
 // OpenAI 兼容：一次极小文本请求（max_tokens=16，费用可忽略）。
 // MiniMax 图像：协议无免费端点，测试会实际生成一张 512px 图（表单已明示会产生费用）。
 
-import type { ModelConfig } from './types';
-import { getApiKey } from './configStore';
-import { chatCompletion } from './openaiClient';
-import { generateImage } from './minimaxClient';
+import type { ModelConfig } from '../types';
+import { getApiKey } from '../configStore';
+import { chatCompletion } from '../clients/openaiClient';
+import { generateImage } from '../clients/minimaxClient';
 
 export interface ConnectionTestResult {
   ok: boolean;
