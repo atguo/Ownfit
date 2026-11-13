@@ -33,6 +33,9 @@ export interface PreviewSlotItem {
   secondary: string[];
   /** 逐件有效穿法（C4/F3：来自入队快照，已按槽位语义归一） */
   wearStyle?: string | null;
+  /** 衣物主图 data URL（2026-11-13 H3-Image：真图参考，衣物保真从"纯文字特征"升级为"实拍参考+文字特征"；
+   * 旧 image-01 不支持衣物参考图，装配层不携带（仍走文字路径）。 */
+  photoDataUrl?: string | null;
 }
 
 /** 后处理仓库依赖（生产接线 = previewPostprocessRepository；测试可注入替身）。
@@ -74,6 +77,8 @@ export interface PreviewRunnerDeps {
     apiKey: string;
     prompt: string;
     personDataUrl: string;
+    /** 衣物实拍参考图（H3-Image 真图路径；顺序与 prompt 清单一致，旧模型忽略） */
+    garmentImages: string[];
     signal: AbortSignal;
   }): Promise<{ ok: true; imageUrl: string } | { ok: false; kind: string; message: string }>;
   /** §8.4.1 条件提交：下载到唯一新文件 + 状态/指针校验 + 产物与后处理落库。
@@ -337,6 +342,7 @@ export function createPreviewTaskRunner(deps: PreviewRunnerDeps): PreviewRunner 
         apiKey,
         prompt,
         personDataUrl: reference.dataUrl,
+        garmentImages: items.map((item) => item.photoDataUrl).filter(Boolean) as string[],
         signal: controller.signal,
       });
     } finally {
@@ -596,6 +602,7 @@ export function createPreviewTaskRunner(deps: PreviewRunnerDeps): PreviewRunner 
       apiKey,
       prompt: retryPrompt.text,
       personDataUrl: reference.dataUrl,
+      garmentImages: input.slotItems.map((item) => item.photoDataUrl).filter(Boolean) as string[],
       signal: new AbortController().signal,
     });
     if (!retry.ok) return false; // 纠偏生成失败：保留首次结果与核对记录（不无限重试）

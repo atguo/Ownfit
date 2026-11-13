@@ -12,6 +12,18 @@ M0–M5 完成（M5 视同验收）；M6 进行中：批次 1/2 已收口，批�
 - `src/features/`：`outfitSession` 会话状态胶水（撤销栈、订阅与锁定/替换/穿法操作；槽位与契约构造等纯规则已移 `domain/outfitRules.ts`，会话来源 origin：manual/ai），分析/预览/推荐 store，`weatherAuto` 自动天气编排，`sheets/` 原生弹层。`demoStore` 承载当次场景等内存上下文；推荐已消费该当次场景（含温度来源区分，演示温度不进 AI）。
 - `plugins/`：Expo 配置插件（`withReleaseSigning.js` 注入 release 正式签名，经 prebuild 生效）；`keystores/`（git 忽略，README 入库）存放构建机本机的签名材料。
 
+### MiniMax-H3-Image 接入：预览真图参考路径（2026-11-13，项目用户指示）
+
+替换 image-01 成为新默认（旧配置兼容回退）：
+
+- `clients/minimaxClient.ts`：`isH3ImageModel(modelId)` 按模型代际分流——H3 有参考图走 `/v1/images/edits`（images[] data URI，1~16 张）、无图走 `/v1/images/generations`（连接测试场景）；`h3EndpointFor` 自动把旧 `/v1/image_generation` 尾段改写到目标接口（已填新接口原样）。H3 响应 `data[]`（url 或 error 项，部分失败仍 200）；HTTP 402→quota、422→content。旧 image-01 仍走 subject_reference 原形态（衣物图不发送）。
+- `runners/previewTaskRunner.ts`：`PreviewSlotItem` 增 `photoDataUrl`（主图 data URL，读取失败回退纯文字不阻塞）；`generate` 入参增 `garmentImages`（首次生成与 C8 纠偏重试两处均携带）。
+- `features/previewStore.ts`：`describeItems` 经 `readAnalysisImage` 取主图；H3 时 prompt 前缀加参考图编号说明（图1人物、图2起衣物，顺序与清单一致）。
+- 表单/弹层提示：MiniMax 地址 placeholder 与模型 ID placeholder 更新为 H3 形态。
+- 边界：照片内容不进输入指纹（快照校验以单品 revision 兜底，防偏核对为最终防线）；请求体总大小限 64MiB（当前 3~4 件衣物主图 base64 远低于限）。
+
+验证：`pnpm typecheck` 通过；mobile 回归 **171/171**（endpoint 增 4 项 H3 断言：分流/端点改写/请求形态/旧协议回归）。**真机真实调用 1 次成功**（2026-11-13：modelId 改 MiniMax-H3-Image、旧地址自动改写，人物+3 件衣物实拍 4 张参考图，约 75s 返回；上衣条纹/颜色还原度高，构图裁腿待效果校准）——详见 M6 计划批次 4 同日登记。
+
 ### 结构收敛（2026-11-13，Agent 化改造前置）
 
 按架构评审建议完成两项结构收敛（不改任何业务行为）：①`services/ai` 按 clients（协议客户端）/ runners（三个任务执行器）/ 根（配置与编排）分组归位，28 处导入路径与测试 stub 键、loader 路径同步更新；②`features/outfitSession.ts` 中无副作用的领域规则（槽位映射、必需槽位、有效穿法、缺口、会话→契约构造）移入新建的 `src/domain/outfitRules.ts`（`buildContractPlan` 在 features 保留读全局态的薄包装，页面与测试调用签名不变），`ItemCategory` 类型与 `categories` 全集自 `data/demo.ts` 移入 `src/domain/categories.ts`（demo 不再定义业务类型）。验证：`pnpm typecheck` 通过、mobile 回归 167/167 通过。归档文档（docs/plans/archive/）中的历史路径按存档规则不更新。

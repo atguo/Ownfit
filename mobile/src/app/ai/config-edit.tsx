@@ -106,7 +106,7 @@ export default function AiConfigEditScreen() {
     const insecure = insecureUrlProblem(baseUrl);
     if (insecure) return insecure;
     if (isMinimax && !/\/[a-z]/i.test(baseUrl.trim().replace(/^https?:\/\//i, ''))) {
-      return '图像服务需填写完整接口地址（含路径，如 /v1/image_generation）';
+      return '图像服务需填写完整接口地址（含路径，如 /v1/images/edits 或 /v1/image_generation）';
     }
     if (!modelId.trim()) return '请填写模型 ID';
     if (!existing && !apiKey.trim()) return '请填写 API Key';
@@ -208,7 +208,7 @@ export default function AiConfigEditScreen() {
         <TextField
           value={baseUrl}
           onChangeText={setBaseUrl}
-          placeholder={isMinimax ? 'https://api.minimax.cn/v1/image_generation' : 'https://api.example.com/v1'}
+          placeholder={isMinimax ? 'https://api.minimax.cn/v1/images/edits' : 'https://api.example.com/v1'}
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="url"
@@ -219,7 +219,7 @@ export default function AiConfigEditScreen() {
         <TextField
           value={modelId}
           onChangeText={setModelId}
-          placeholder={isMinimax ? 'image-01' : 'glm-4v-flash'}
+          placeholder={isMinimax ? 'MiniMax-H3-Image' : 'glm-4v-flash'}
           autoCapitalize="none"
           autoCorrect={false}
         />

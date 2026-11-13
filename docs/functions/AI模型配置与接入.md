@@ -57,7 +57,7 @@
 已决定（2026-10-27，项目用户确认；配置管理提前落地，任务执行接入仍属 M5）：
 
 - **URL 类型首批清单**：OpenAI 兼容（基础地址拼接 `/chat/completions`）与 MiniMax 图像（完整接口地址）。依据 A 线现实：项目用户在用服务（GLM/DeepSeek/MiniMax）恰好覆盖这两种协议；新协议出现时再扩充清单。
-- **地址拼接规则（2026-11-03 项目用户确认调整，取代 10-27 的"一律自动拼接"）**：OpenAI 兼容 = 基础地址填到版本号为止（如 `https://api.openai.com/v1`），自动拼接 `/chat/completions`；**MiniMax 图像 = 用户输入完整 API 地址**（如 `https://api.minimax.cn/v1/image_generation`），调用时不追加任何路径——不同图像服务的接口路径可能完全不同，自动补路径会把 `/v1` 基础地址拼成 `/v1/v1/image_generation`（真机 404 实证）。表单按类型分别提示填写方式。
+- **地址拼接规则（2026-11-03 项目用户确认调整，取代 10-27 的"一律自动拼接"）**：OpenAI 兼容 = 基础地址填到版本号为止（如 `https://api.openai.com/v1`），自动拼接 `/chat/completions`；**MiniMax 图像 = 用户输入完整 API 地址**（如 `https://api.minimax.cn/v1/images/edits`），调用时不追加任何路径——不同图像服务的接口路径可能完全不同，自动补路径会把 `/v1` 基础地址拼成 `/v1/v1/image_generation`（真机 404 实证）。表单按类型分别提示填写方式。**2026-11-13 起 MiniMax 图像接入 MiniMax-H3-Image 代际**（项目用户指示）：模型 ID 含 H3-Image 时自动分流到新接口形态——有参考图（人物+衣物实拍）走 `/v1/images/edits`、纯文生图走 `/v1/images/generations`；用户地址尾段若仍是旧 `/v1/image_generation` 会自动改写到目标接口（已填新接口则原样）。旧 image-01 配置不受影响（subject_reference 仅人物、prompt 硬限 1500 字符）。H3-Image 参考图支持 1~16 张（衣物真图输入）、prompt 上限 32000 字符。
 - **服务地址仅接受 https（2026-11-03 项目用户确认，M6 批次 2；2026-11-04 落地）**：内测包禁明文——`app.json` 移除 `usesCleartextTraffic`（Android 默认禁明文，prebuild 产物已核验），配置表单保存/测试前经 `insecureUrlProblem` 拒绝 `http://` 地址。自部署模型需启用 https（或经反向代理）；收敛前保存的 http 配置调用时会被系统拦截，需重新编辑。
 - **名称与 model ID**：分开两个字段——名称为展示名，模型 ID 为请求参数。
 - **多配置**：配置为列表，每条带能力标签（文本/视觉理解/图像生成）。“不同任务如何选择模型”以能力标签实现最小路由（任务按所需能力选配置），细粒度策略待 M5 任务接入时确认。

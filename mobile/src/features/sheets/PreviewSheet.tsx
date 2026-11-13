@@ -271,7 +271,7 @@ export function PreviewSheet({
     if (resolution.status === 'missing') {
       Alert.alert(
         '还没有图像生成模型',
-        '上身预览使用图像生成服务（如 MiniMax image-01）。\n到「我的 → 模型配置」添加配置，能力勾选“图像生成”。',
+        '上身预览使用图像生成服务（如 MiniMax-H3-Image，支持衣物实拍参考；旧 image-01 仅文字特征）。\n到「我的 → 模型配置」添加配置，能力勾选“图像生成”。',
         [{ text: '知道了' }],
       );
       return;
