@@ -39,11 +39,11 @@ import { parsePlan, planRequestSchema, CONTRACT_VERSION } from '@ownfit/contract
 import { parseGarmentAnalysis, GARMENT_ANALYSIS_VERSION } from '@ownfit/contract';
 ```
 
-字段设计与变更规则见 [docs/开发计划.md](../../docs/开发计划.md) §6.3；真实输出适配的未决项登记在 A 线（packages/experiments）。衣物分析实现依据 [分批执行手册](../../docs/plans/2026-10-29-衣物AI分析-分批执行手册.md) §3.1。
+字段设计与变更规则见 [docs/开发计划.md](../../docs/开发计划.md) §6.3；真实输出适配的未决项登记在 A 线（packages/experiments）。衣物分析实现依据 [分批执行手册](../../docs/plans/archive/衣物AI分析/2026-10-29-衣物AI分析-分批执行手册.md) §3.1。
 
 ## 衣物分析契约（GARMENT_ANALYSIS_VERSION = `2.0.0-draft`）
 
-独立版本，不改变搭配字段。已取代 1.0 固定字段三态；实现依据为 [2.0 重构设计](../../docs/plans/2026-10-29-衣物分析字段与来源重构-设计.md)。
+独立版本，不改变搭配字段。已取代 1.0 固定字段三态；实现依据为 [2.0 重构设计](../../docs/plans/archive/衣物AI分析/2026-10-29-衣物分析字段与来源重构-设计.md)。
 
 | 键 | 当前结构与约束 |
 | --- | --- |

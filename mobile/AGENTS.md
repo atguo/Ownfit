@@ -29,7 +29,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 
 - 新增仓库：`analysisTypes.ts`（任务/属性/视图跨批类型）、`taskRepository.ts`（`createGarmentTask` 幂等与同衣物去重、`updateTaskStatus` 条件更新、默认视觉模型读写、归档取消与删除清理）、`attributeRepository.ts`（`recordUserAttribute`、`getAnalysisView` 人工优先取值、`commitGarmentAnalysis` 原子提交与 stale/删除保护）。
 - `photoRepository.getMainPhotoForAnalysis(itemId)`：按 `items.main_photo_id` 解析稳定分析输入，删除后返回 null；`readAnalysisImage(itemId)` 校验文件后返回内存 data URL（不返回 file URI）。
-- 事务统一使用同一连接事务（`withTransactionAsync`）；**禁止** `withExclusiveTransactionAsync`（会新建未带 SQLCipher 密钥的连接）。理由见根 AGENTS 与 [分批执行手册](../docs/plans/2026-10-29-衣物AI分析-分批执行手册.md) D4。
+- 事务统一使用同一连接事务（`withTransactionAsync`）；**禁止** `withExclusiveTransactionAsync`（会新建未带 SQLCipher 密钥的连接）。理由见根 AGENTS 与 [分批执行手册](../docs/plans/archive/衣物AI分析/2026-10-29-衣物AI分析-分批执行手册.md) D4。
 - AI 服务层（P4，假网络验证，未真实调用）：`types.ts` 增 `callRevision`/`isVisionCandidate`；`configStore` 增 `loadConfigsStructured`；新增 `services/ai/visionConfig.ts`（视觉配置路由 ready/choose/missing/invalid）与 `services/ai/garmentAnalysis.ts`（分析提示词、单张图片请求、严格 JSON 解析、`鞋`→`鞋履` 适配、契约校验）。`openaiClient.chatCompletion` 追加第 5 个参数 `options{maxTokens,signal}`（前四参数与顺序不变）。
 - 任务执行（P5）：`services/ai/garmentTaskRunner.ts`（依赖注入的串行执行器，`enqueueGarmentAnalysis`/`buildInputKey`/`createDefaultGarmentTaskRunnerDeps`；启动恢复、前后台门控、尽力中止、本地提交重试）与 `features/garmentAnalysisStore.ts`（`subscribeAnalysisChanges`/`notifyAnalysisChanged`、会话批次、`requestKeyFor`）。
 - 页面接入（P6）：`app/_layout.tsx` 挂载执行器单例与 AppState 门控；`app/add.tsx` 保存后自动入队、模型提示与选择、AI 建议预填；`app/ai/config.tsx` 可设分析默认模型；`features/sheets/VisionModelSheet.tsx` 新增。
@@ -103,7 +103,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 
 ### 核心目标能力改进批次（2026-11-04 实现完成，待真机走查）
 
-依据[能力改进建议](../docs/plans/2026-11-03-围绕核心目标的能力改进建议.md)与[计划落地代码评审](../docs/plans/2026-11-03-计划落地代码评审.md)，项目用户确认四项决定（任务范围=通勤/日常外出+上装/下装/鞋/外套≤2层、预览=文字路径+防偏闭环、D3 提前、放行口径=三层结论）后授权自主实施全部批次；实施决策 D-1～D-16 登记于[落地计划与决策记录](../docs/plans/2026-11-04-核心目标能力改进-落地计划与决策记录.md)。真实模型调用 0 次；效果结论未知。M6 批次 2 的身材链路在本批次中沿用并随提示词升 v4。
+依据[能力改进建议](../docs/plans/archive/核心目标能力改进/2026-11-03-围绕核心目标的能力改进建议.md)与[计划落地代码评审](../docs/plans/archive/核心目标能力改进/2026-11-03-计划落地代码评审.md)，项目用户确认四项决定（任务范围=通勤/日常外出+上装/下装/鞋/外套≤2层、预览=文字路径+防偏闭环、D3 提前、放行口径=三层结论）后授权自主实施全部批次；实施决策 D-1～D-16 登记于[落地计划与决策记录](../docs/plans/2026-11-04-核心目标能力改进-落地计划与决策记录.md)。真实模型调用 0 次；效果结论未知。M6 批次 2 的身材链路在本批次中沿用并随提示词升 v4。
 
 - **数据**：schema **v7**——`preview_checks`（C8 核对记录）、`preview_comparisons`（C5 比较组）、`plan_items.wear_style`（C4 逐件穿法）、`worn_records.reasons`（D3 反馈原因 JSON）。搭配契约升 **1.1.0**（`Plan.items` 可选 per-item wearStyle，顶层 wear 保留兼容；契约样例 9 组，package.json 同步 1.1.0）。
 - **衣物证据（A1/A2/A3）**：`getAnalysisView` 有效值改为"同名人工行优先、AI 行其次"（重新分析不再静默覆盖人工确认值，历史行保留可比较）；推荐/预览名称用户名称优先；新增 `services/ai/garmentView.ts` 归一化视图（关键特征/次要分层、主色 hex，推荐/预览/核对三处同源）与 `services/ai/evidenceCheck.ts`（锁定单品证据缺口提示，可跳过，不全柜拦截）。
