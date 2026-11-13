@@ -28,7 +28,7 @@ import {
   resolveVisionForAnalysis,
   subscribeAnalysisChanges,
 } from '../../features/garmentAnalysisStore';
-import { categories, type ItemCategory } from '../../data/demo';
+import { categories, type ItemCategory } from '../../domain/categories';
 import { startOutfitFrom } from '../../features/outfitSession';
 import { colors, type } from '../../ui/tokens';
 

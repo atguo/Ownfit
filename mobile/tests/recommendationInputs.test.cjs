@@ -176,7 +176,7 @@ async function loadStore() {
       getConfig: (id) => CONFIGS.find((c) => c.id === id),
       getApiKey: async () => 'sk-test',
     },
-    [path.join(SRC, 'services', 'ai', 'recommendationTaskRunner.ts')]: {
+    [path.join(SRC, 'services', 'ai', 'runners', 'recommendationTaskRunner.ts')]: {
       createRecommendationTaskRunner: (deps) => {
         runnerCalls.init += 1;
         runnerCalls.deps = deps;
@@ -198,7 +198,7 @@ async function loadPipeline(chatStub) {
       getConfig: (id) => CONFIGS.find((c) => c.id === id),
       getApiKey: async () => 'sk-test',
     },
-    [path.join(SRC, 'services', 'ai', 'openaiClient.ts')]: { chatCompletion: chatStub },
+    [path.join(SRC, 'services', 'ai', 'clients', 'openaiClient.ts')]: { chatCompletion: chatStub },
   });
   const store = loader.load(path.join(SRC, 'features', 'recommendationStore.ts'));
   const runner = store.initRecommendationRunner();
@@ -697,6 +697,19 @@ function loadSession() {
           getItem: async (id) => (items[id] ? { ...items[id], status: 'active' } : undefined),
           listItemIdsByStatus: async () => Object.keys(items),
         };
+      }
+      if (id === '../domain/outfitRules') {
+        // 领域规则为被测核心，真实转译加载（纯函数，transpile 后类型导入剥离、运行时零依赖）
+        const depFile = path.resolve(__dirname, '../src/domain/outfitRules.ts');
+        const depJs = ts.transpileModule(fs.readFileSync(depFile, 'utf8'), {
+          compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+        }).outputText;
+        const depModule = { exports: {} };
+        vm.runInNewContext(depJs, {
+          exports: depModule.exports, module: depModule,
+          require(depId) { throw new Error(`Unexpected dependency in outfitRules: ${depId}`); },
+        }, { filename: depFile });
+        return depModule.exports;
       }
       throw new Error(`Unexpected dependency: ${id}`);
     },

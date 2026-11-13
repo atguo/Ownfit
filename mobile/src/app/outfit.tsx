@@ -22,19 +22,21 @@ import {
 } from '../features/recommendationStore';
 import {
   buildContractPlan,
-  effectiveSlotWear,
   getOutfitSession,
-  missingSlots,
   outfitHistoryLength,
   outfitUndo,
   replaceSlot,
   setWear,
   toggleLock,
   useOutfitSession,
+} from '../features/outfitSession';
+import {
+  effectiveSlotWear,
+  missingSlots,
   slotGapMessage,
   slotLabels,
   type OutfitSlot,
-} from '../features/outfitSession';
+} from '../domain/outfitRules';
 import { getContextSnapshot } from '../features/demoStore';
 import { findDuplicate, saveContractPlan } from '../data/repositories/planRepository';
 import { getItem } from '../data/repositories/itemRepository';

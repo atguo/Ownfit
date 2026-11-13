@@ -11,7 +11,8 @@ import { Button } from '../../ui/components/Button';
 import { useToast } from '../../ui/components/Toast';
 import { getItem, listItemIdsByStatus, type WardrobeItem } from '../../data/repositories/itemRepository';
 import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
-import { replaceSlot, slotForCategory, slotGapMessage, slotLabels, type OutfitSlot } from '../outfitSession';
+import { replaceSlot } from '../outfitSession';
+import { slotForCategory, slotGapMessage, slotLabels, type OutfitSlot } from '../../domain/outfitRules';
 import { colors, radius, type } from '../../ui/tokens';
 
 export function SlotReplaceSheet({

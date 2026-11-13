@@ -23,7 +23,8 @@ import {
   subscribeRecommendationChanges,
   verifySnapshotRevisions,
 } from '../recommendationStore';
-import { getOutfitSession, loadOutfitFrom, replaceSlot, slotForCategory, type OutfitSlot } from '../outfitSession';
+import { getOutfitSession, loadOutfitFrom, replaceSlot } from '../outfitSession';
+import { slotForCategory, type OutfitSlot } from '../../domain/outfitRules';
 import { checkGarmentEvidence } from '../../services/ai/evidenceCheck';
 import { parseRecommendationInputV2 } from '../../services/ai/recommendationInput';
 import type { WearStyle } from '@ownfit/contract';

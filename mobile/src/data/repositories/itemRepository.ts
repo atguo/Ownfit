@@ -13,7 +13,7 @@ import {
   ORIGINAL_MAX_DIMENSION,
 } from './photoRepository';
 import { cancelActiveTasks, deleteTasksForItem } from './taskRepository';
-import { categories, type ItemCategory } from '../demo';
+import { categories, type ItemCategory } from '../../domain/categories';
 
 export type ItemStatus = 'draft' | 'active' | 'archived' | 'deleted';
 

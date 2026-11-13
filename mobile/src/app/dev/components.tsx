@@ -20,7 +20,7 @@ import { ChipSelect, Field, TextField } from '../../ui/components/Field';
 import { useToast } from '../../ui/components/Toast';
 import { resetDemo, useDemoStore } from '../../features/demoStore';
 import { createDraftFromPhoto, confirmItem } from '../../data/repositories/itemRepository';
-import { categories } from '../../data/demo';
+import { categories } from '../../domain/categories';
 import { colors, pagePadding, radius, type } from '../../ui/tokens';
 
 // 组件展示（M1 交付物）：设计令牌、组件与状态一屏陈列，并挂接演示数据切换（空衣橱态等）。

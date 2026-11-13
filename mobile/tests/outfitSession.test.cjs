@@ -24,6 +24,19 @@ function session() {
         getItem: async (id) => items[id] ? { ...items[id], status: 'active' } : undefined,
         listItemIdsByStatus: async () => ['A', 'pants', 'shoes', 'B', 'C', 'shoes2'],
       };
+      if (id === '../domain/outfitRules') {
+        // 领域规则为被测核心，真实转译加载（纯函数，transpile 后类型导入剥离、运行时零依赖）
+        const depFile = path.resolve(__dirname, '../src/domain/outfitRules.ts');
+        const depJs = ts.transpileModule(fs.readFileSync(depFile, 'utf8'), {
+          compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+        }).outputText;
+        const depModule = { exports: {} };
+        vm.runInNewContext(depJs, {
+          exports: depModule.exports, module: depModule,
+          require(depId) { throw new Error(`Unexpected dependency in outfitRules: ${depId}`); },
+        }, { filename: depFile });
+        return depModule.exports;
+      }
       throw new Error(`Unexpected dependency: ${id}`);
     },
   }, { filename });

@@ -34,7 +34,7 @@ import {
   subscribeAnalysisChanges,
   createActionId,
 } from '../features/garmentAnalysisStore';
-import { categories, type ItemCategory } from '../data/demo';
+import { categories, type ItemCategory } from '../domain/categories';
 import { colors, radius, type } from '../ui/tokens';
 
 // 添加一件衣服：拍照/相册多选 → 每张自动建草稿 → 分析建议 → 逐件确认品类入库。

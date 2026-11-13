@@ -45,7 +45,7 @@ import {
   subscribeAnalysisChanges,
 } from '../../features/garmentAnalysisStore';
 import { addToColorLibrary } from '../../data/repositories/colorLibraryRepository';
-import { categories, type ItemCategory } from '../../data/demo';
+import { categories, type ItemCategory } from '../../domain/categories';
 import { colors, radius, type } from '../../ui/tokens';
 
 export interface WardrobeItemDetail {

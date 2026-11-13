@@ -12,7 +12,7 @@ import type { WearStyle } from '@ownfit/contract';
 import { listPlans, deletePlan, type SavedPlan } from '../../data/repositories/planRepository';
 import { getItem } from '../../data/repositories/itemRepository';
 import { getMainPhotoPaths, photoUri } from '../../data/repositories/photoRepository';
-import { slotForCategory } from '../../features/outfitSession';
+import { slotForCategory } from '../../domain/outfitRules';
 import { colors, radius, type } from '../../ui/tokens';
 
 const filters = ['全部', '穿过', '穿过且满意'] as const;
