@@ -96,7 +96,14 @@ export async function savePreviewReference(input: {
   const fileName = `reference-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}.jpg`;
   const target = new File(dir, fileName);
   new File(saved.uri).move(target);
-  if (!target.exists) throw new Error('人物参考落盘失败（文件不可读）');
+  // exists 可见性延迟容错（M5 同坑复现 2026-11-13）：move 完成为异步可见，立即查询可能 false。
+  // 短重试后再判定；move 本身失败会抛错，不会静默走到这里。
+  let moved = target.exists;
+  for (let i = 0; !moved && i < 5; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    moved = target.exists;
+  }
+  if (!moved) throw new Error('人物参考落盘失败（文件不可读）');
 
   const record: PreviewReference = {
     path: `preview-ref/${fileName}`,
