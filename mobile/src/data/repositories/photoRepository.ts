@@ -12,6 +12,8 @@ import { hasRoomForNewPhoto } from './maintenanceRepository';
 /** 原件副本的最长边（px）。完整原图保留在系统相册，APP 不承诺管理相册原件。 */
 export const ORIGINAL_MAX_DIMENSION = 2048;
 const THUMB_WIDTH = 480;
+/** 单件衣物最多保存的照片张数（1 张主图 + 最多 5 张补充细节/背面图） */
+export const MAX_ITEM_PHOTOS = 6;
 
 export interface SavedPhoto {
   id: string;
@@ -123,6 +125,131 @@ export async function insertPhotoRecord(input: {
 /** 解析相对路径为可显示的 file:// URI（列表与详情共用） */
 export function photoUri(relativePath: string): string {
   return `${Paths.document.uri}/${relativePath}`;
+}
+
+/** 列出某件单品的全部照片（主图优先，其次按创建时间正序） */
+export async function listPhotosForItem(itemId: string): Promise<SavedPhoto[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    id: string;
+    item_id: string;
+    kind: 'main' | 'extra';
+    original_path: string;
+    thumb_path: string;
+  }>(
+    `SELECT id, item_id, kind, original_path, thumb_path
+       FROM photos
+      WHERE item_id = ?
+        AND EXISTS (SELECT 1 FROM items WHERE items.id = photos.item_id AND items.status != 'deleted')
+      ORDER BY CASE WHEN kind = 'main' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`,
+    itemId,
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    itemId: row.item_id,
+    kind: row.kind,
+    originalPath: row.original_path,
+    thumbPath: row.thumb_path,
+  }));
+}
+
+/**
+ * 给同一件单品补充一张照片（kind='extra'），同时推进 items.revision。
+ * 写入失败时回滚已落盘文件，不留悬空记录。
+ */
+export async function addExtraPhotoToItem(
+  itemId: string,
+  input: { sourceUri: string; sourceWidth?: number; sourceHeight?: number },
+): Promise<SavedPhoto> {
+  const existing = await listPhotosForItem(itemId);
+  if (existing.length >= MAX_ITEM_PHOTOS) {
+    throw new Error(`同一件衣物最多保存 ${MAX_ITEM_PHOTOS} 张照片`);
+  }
+  const files = await savePhotoFiles({
+    sourceUri: input.sourceUri,
+    sourceWidth: input.sourceWidth ?? ORIGINAL_MAX_DIMENSION + 1,
+    sourceHeight: input.sourceHeight ?? ORIGINAL_MAX_DIMENSION + 1,
+  });
+  const db = await getDb();
+  const now = new Date().toISOString();
+  const kind: 'main' | 'extra' = existing.length === 0 ? 'main' : 'extra';
+  try {
+    await db.withTransactionAsync(async () => {
+      await db.runAsync(
+        'INSERT INTO photos (id, item_id, kind, original_path, thumb_path, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        files.id,
+        itemId,
+        kind,
+        files.originalPath,
+        files.thumbPath,
+        now,
+      );
+      if (kind === 'main') {
+        await db.runAsync(
+          'UPDATE items SET main_photo_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?',
+          files.id,
+          now,
+          itemId,
+        );
+      } else {
+        await db.runAsync(
+          'UPDATE items SET revision = revision + 1, updated_at = ? WHERE id = ?',
+          now,
+          itemId,
+        );
+      }
+    });
+  } catch (error) {
+    deletePhotoFiles(files.originalPath, files.thumbPath);
+    throw error;
+  }
+  return { id: files.id, itemId, kind, originalPath: files.originalPath, thumbPath: files.thumbPath };
+}
+
+/** 将某件单品的指定照片设为主图（同事务更新 kind、items.main_photo_id 与 revision） */
+export async function setMainPhotoForItem(itemId: string, photoId: string): Promise<void> {
+  const db = await getDb();
+  const target = await db.getFirstAsync<{ id: string }>(
+    'SELECT id FROM photos WHERE id = ? AND item_id = ?',
+    photoId,
+    itemId,
+  );
+  if (!target) throw new Error('所选照片不存在');
+  const now = new Date().toISOString();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync("UPDATE photos SET kind = 'extra' WHERE item_id = ? AND id != ?", itemId, photoId);
+    await db.runAsync("UPDATE photos SET kind = 'main' WHERE id = ?", photoId);
+    await db.runAsync(
+      'UPDATE items SET main_photo_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?',
+      photoId,
+      now,
+      itemId,
+    );
+  });
+}
+
+/** 删除单品的一张非主图补充照片（保留至少 1 张主图；同步清理文件并递增 revision） */
+export async function deleteExtraPhotoFromItem(itemId: string, photoId: string): Promise<void> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ id: string; kind: string; original_path: string; thumb_path: string }>(
+    'SELECT id, kind, original_path, thumb_path FROM photos WHERE id = ? AND item_id = ?',
+    photoId,
+    itemId,
+  );
+  if (!row) return;
+  if (row.kind === 'main') {
+    throw new Error('请先将另一张照片设为主图，再删除当前主图');
+  }
+  const now = new Date().toISOString();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM photos WHERE id = ?', photoId);
+    await db.runAsync(
+      'UPDATE items SET revision = revision + 1, updated_at = ? WHERE id = ?',
+      now,
+      itemId,
+    );
+  });
+  deletePhotoFiles(row.original_path, row.thumb_path);
 }
 
 /** 主图路径对（详情用原图、列表用缩略图） */

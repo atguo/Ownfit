@@ -5,7 +5,7 @@
 import type { ModelConfig } from '../types';
 import { getApiKey } from '../configStore';
 import { chatCompletion } from '../clients/openaiClient';
-import { generateImage } from '../clients/minimaxClient';
+import { generateImageByConfig } from '../clients/imageClient';
 
 export interface ConnectionTestResult {
   ok: boolean;
@@ -36,8 +36,8 @@ export async function testConnection(config: ModelConfig, draftApiKey?: string):
     };
   }
 
-  // MiniMax 图像：最小一张 512px
-  const result = await generateImage(config, apiKey, {
+  // 图像生成协议（OpenAI 图像兼容 / MiniMax 图像）：发送最小测试图请求
+  const result = await generateImageByConfig(config, apiKey, {
     prompt: 'a simple green leaf on white background',
     aspectRatio: '1:1',
     n: 1,

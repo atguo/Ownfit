@@ -3,7 +3,7 @@
 // 区分“未配置”“配置无效”“配置损坏”，不把它们统一说成未配置。
 
 import { getApiKey, loadConfigsStructured } from './configStore';
-import { callRevisionOf, isVisionCandidate, type ModelConfig } from './types';
+import { callRevisionOf, isImageGenUrlKind, isVisionCandidate, type ModelConfig } from './types';
 
 export type InvalidVisionConfigReason = 'config_unreadable' | 'config_invalid' | 'key_missing';
 
@@ -113,9 +113,9 @@ export async function resolveTextConfig(defaultConfigId?: string | null): Promis
   return { status: 'choose', candidates: usable };
 }
 
-/** 图像生成候选：MiniMax 图像 URL 类型 + image_gen 能力标签 */
+/** 图像生成候选：支持的图像协议类型（OpenAI 图像兼容 / MiniMax 图像） + image_gen 能力标签 */
 function isImageGenCandidate(config: ModelConfig): boolean {
-  return config.urlKind === 'minimax' && config.capabilities.includes('image_gen') && !!config.baseUrl && !!config.modelId;
+  return isImageGenUrlKind(config.urlKind) && config.capabilities.includes('image_gen') && !!config.baseUrl && !!config.modelId;
 }
 
 /**

@@ -1004,6 +1004,76 @@ test('人工属性修改使在途分析结果过期（stale），不覆盖用户
     close();
   }
 });
+
+test('首次入库草稿自动入库：用户未填写数据时分析成功自动置 active 并保留 ai_inferred 来源', async () => {
+  const { db, close, tasks, attributes, items } = await setup({ id: 'item-draft', status: 'draft', revision: 1 });
+  try {
+    const task = await startTask(tasks, { itemId: 'item-draft', requestKey: 'req-draft-auto' });
+    assert.equal(await attributes.commitGarmentAnalysis(task.id, singleResult), 'applied');
+
+    const updated = await items.getItem('item-draft');
+    assert.equal(updated.status, 'active', '未填写数据的首次草稿分析成功后应自动入库');
+    assert.equal(updated.category, '上衣');
+    assert.equal(updated.name, '白色衬衫');
+    assert.equal(updated.revision, 1, 'AI 自动入库不递增 revision');
+
+    const catRow = db
+      .prepare("SELECT value, source_type, confirm_status FROM attributes WHERE item_id = ? AND field = 'category'")
+      .get('item-draft');
+    assert.equal(catRow.value, '上衣');
+    assert.equal(catRow.source_type, 'ai_inferred', '自动入库品类应标为 ai_inferred，不伪造人工确认');
+    assert.equal(catRow.confirm_status, 'unconfirmed');
+
+    const view = await attributes.getAnalysisView('item-draft');
+    assert.equal(view.category.value, '上衣');
+    assert.equal(view.category.source, 'ai_inferred');
+    assert.equal(view.attributes.length, 3, '内置 category 行不混入动态属性清单');
+  } finally {
+    close();
+  }
+});
+
+test('首次入库草稿异常兜底：非单品或无品类时保持草稿不自动入库', async () => {
+  const { close, tasks, attributes, items } = await setup({ id: 'item-draft-bad', status: 'draft', revision: 1 });
+  try {
+    const task = await startTask(tasks, { itemId: 'item-draft-bad', requestKey: 'req-draft-bad' });
+    assert.equal(await attributes.commitGarmentAnalysis(task.id, diagnosticResult), 'applied');
+    const afterDiag = await items.getItem('item-draft-bad');
+    assert.equal(afterDiag.status, 'draft', '非 single 结果不得自动入库');
+    assert.equal(afterDiag.category, null);
+
+    const noCatTask = await startTask(tasks, { itemId: 'item-draft-bad', requestKey: 'req-draft-nocat' });
+    assert.equal(
+      await attributes.commitGarmentAnalysis(noCatTask.id, { ...singleResult, category: null }),
+      'applied',
+    );
+    const afterNoCat = await items.getItem('item-draft-bad');
+    assert.equal(afterNoCat.status, 'draft', '未识别出品类时不得自动入库');
+  } finally {
+    close();
+  }
+});
+
+test('已入库衣物重新分析不覆盖既有名称与品类', async () => {
+  const { close, tasks, attributes, items } = await setup({ id: 'item-active', status: 'active', revision: 1 });
+  try {
+    const task = await startTask(tasks, { itemId: 'item-active', requestKey: 'req-active-keep' });
+    assert.equal(
+      await attributes.commitGarmentAnalysis(task.id, {
+        ...singleResult,
+        category: '外套',
+        suggestedName: 'AI 猜的新名字',
+      }),
+      'applied',
+    );
+    const after = await items.getItem('item-active');
+    assert.equal(after.status, 'active');
+    assert.equal(after.category, '上衣', '已入库衣物品类不得被 AI 覆盖');
+    assert.equal(after.name, '衬衫', '已入库衣物名称不得被 AI 覆盖');
+  } finally {
+    close();
+  }
+});
 }
 
 module.exports = { createLoader, expoStubs, SRC, CONTRACT_ENTRY, plain, seedItem, setup, startTask, taskInput };

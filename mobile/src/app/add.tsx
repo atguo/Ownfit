@@ -8,7 +8,7 @@ import { Button } from '../ui/components/Button';
 import { Notice } from '../ui/components/Basics';
 import { TextField } from '../ui/components/Field';
 import { useToast } from '../ui/components/Toast';
-import { photoUri } from '../data/repositories/photoRepository';
+import { addExtraPhotoToItem, listPhotosForItem, MAX_ITEM_PHOTOS, photoUri } from '../data/repositories/photoRepository';
 import {
   confirmItem,
   createDraftFromPhoto,
@@ -37,12 +37,14 @@ import {
 import { categories, type ItemCategory } from '../domain/categories';
 import { colors, radius, type } from '../ui/tokens';
 
-// 添加一件衣服：拍照/相册多选 → 每张自动建草稿 → 分析建议 → 逐件确认品类入库。
-// 规则：取消选图不建任何草稿；草稿持久化（重启可恢复）；品类确认前不入库；
-// 照片保存成功后自动排队做衣物分析（不阻塞保存）；用户输入与 AI 建议分开保存。
+// 添加一件衣服：拍照/相册多选 → 每张自动建草稿 → 自动排队做衣物分析：
+// - 用户未手动填写数据时，分析成功识别出单品与品类后自动入库（AI 推断来源可追溯）；
+// - 未配置模型、分析失败或无法识别单品/品类时保留为草稿，支持手动填写并确认入库；
+// - 用户手动填写的名称与品类优先，AI 不覆盖人工输入。
 
 interface DraftView extends WardrobeItem {
   thumbUri: string | null;
+  photoCount: number;
 }
 
 interface DraftSuggestion {
@@ -57,6 +59,8 @@ export default function AddScreen() {
   const router = useRouter();
   const toast = useToast();
   const [drafts, setDrafts] = useState<DraftView[]>([]);
+  /** 本次会话中经模型分析自动入库的单品（供界面反馈，避免卡片直接消失让用户困惑） */
+  const [autoSaved, setAutoSaved] = useState<DraftView[]>([]);
   /** 用户输入的名称（只有用户改过才有键；空字符串表示用户主动清空） */
   const [names, setNames] = useState<Record<string, string>>({});
   /** 用户选择的品类（只有用户点过才有键） */
@@ -66,16 +70,41 @@ export default function AddScreen() {
   const [busy, setBusy] = useState(false);
 
   const draftIdsRef = useRef<string[]>([]);
+  const namesRef = useRef<Record<string, string>>({});
+  const pickedCategoriesRef = useRef<Record<string, ItemCategory>>({});
   /** 等待用户选择/配置模型的批次：返回录入页时据此续接 */
   const pendingConfigRef = useRef<{ actionId: string; itemIds: string[] } | null>(null);
   const resumedActionRef = useRef<string | null>(null);
 
+  useEffect(() => {
+    namesRef.current = names;
+  }, [names]);
+
+  useEffect(() => {
+    pickedCategoriesRef.current = pickedCategories;
+  }, [pickedCategories]);
+
   const refreshSuggestions = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return;
     const next: Record<string, DraftSuggestion> = {};
+    const newlyAutoSaved: DraftView[] = [];
     for (const id of ids) {
+      const [item, view] = await Promise.all([getItem(id), getAnalysisView(id)]);
+      if (
+        item &&
+        item.status === 'active' &&
+        namesRef.current[id] === undefined &&
+        pickedCategoriesRef.current[id] === undefined
+      ) {
+        const [thumbUri, photos] = await Promise.all([getMainThumb(id), listPhotosForItem(id)]);
+        newlyAutoSaved.push({
+          ...item,
+          thumbUri: thumbUri ? photoUri(thumbUri) : null,
+          photoCount: Math.max(1, photos.length),
+        });
+        continue;
+      }
       // 视图已按“人工优先、取当前照片最新成功结果”的规则组装，页面不自行拼接多次输出
-      const view = await getAnalysisView(id);
       const entry: DraftSuggestion = {
         hasResult: view.lastValidResult !== null,
         status: view.latestTask?.status ?? null,
@@ -85,8 +114,27 @@ export default function AddScreen() {
       if (view.category?.value) entry.category = view.category.value as ItemCategory;
       next[id] = entry;
     }
-    setSuggestions((prev) => ({ ...prev, ...next }));
-  }, []);
+    if (Object.keys(next).length > 0) {
+      setSuggestions((prev) => ({ ...prev, ...next }));
+    }
+    if (newlyAutoSaved.length > 0) {
+      const movedIds = new Set(newlyAutoSaved.map((item) => item.id));
+      draftIdsRef.current = draftIdsRef.current.filter((id) => !movedIds.has(id));
+      setDrafts((prev) => prev.filter((item) => !movedIds.has(item.id)));
+      setAutoSaved((prev) => {
+        const existingIds = new Set(prev.map((item) => item.id));
+        const additions = newlyAutoSaved.filter((item) => !existingIds.has(item.id));
+        return additions.length > 0 ? [...additions, ...prev] : prev;
+      });
+      if (newlyAutoSaved.length === 1) {
+        const one = newlyAutoSaved[0];
+        const label = one.name ? `${one.name}（${one.category ?? '未分类'}）` : (one.category ?? '衣物');
+        toast(`分析完成，已自动入库：${label}`);
+      } else {
+        toast(`分析完成，已自动入库 ${newlyAutoSaved.length} 件`);
+      }
+    }
+  }, [toast]);
 
   useFocusEffect(
     useCallback(() => {
@@ -96,9 +144,9 @@ export default function AddScreen() {
         const views: DraftView[] = [];
         for (const id of ids) {
           // 读真实草稿记录（含 revision 等字段），不要用假值拼装 WardrobeItem
-          const [item, thumbUri] = await Promise.all([getItem(id), getMainThumb(id)]);
+          const [item, thumbUri, photos] = await Promise.all([getItem(id), getMainThumb(id), listPhotosForItem(id)]);
           if (!item) continue;
-          views.push({ ...item, thumbUri: thumbUri ? photoUri(thumbUri) : null });
+          views.push({ ...item, thumbUri: thumbUri ? photoUri(thumbUri) : null, photoCount: Math.max(1, photos.length) });
         }
         if (!active) return;
         setDrafts(views);
@@ -196,7 +244,7 @@ export default function AddScreen() {
         try {
           const item = await createDraftFromPhoto(asset.uri, clientRef, asset.width, asset.height);
           const thumbUri = await getMainThumb(item.id);
-          const view: DraftView = { ...item, thumbUri: thumbUri ? photoUri(thumbUri) : null };
+          const view: DraftView = { ...item, thumbUri: thumbUri ? photoUri(thumbUri) : null, photoCount: 1 };
           setDrafts((prev) => [...prev, view]);
           draftIdsRef.current = [...draftIdsRef.current, item.id];
           createdIds.push(item.id);
@@ -207,7 +255,7 @@ export default function AddScreen() {
         }
       }
       if (created > 0) {
-        toast(created > 1 ? `已存入 ${created} 份草稿，正在分析` : '已存入草稿，正在分析');
+        toast(created > 1 ? `已存入 ${created} 份草稿，正在自动分析并入库` : '已存入草稿，正在自动分析并入库');
       }
       if (createdIds.length > 0) {
         const actionId = createActionId();
@@ -266,12 +314,86 @@ export default function AddScreen() {
   }
 
   function analysisHint(suggestion: DraftSuggestion | undefined): string {
-    if (!suggestion) return '正在分析…';
-    if (suggestion.status === 'queued' || suggestion.status === 'running') return '正在分析…';
+    if (!suggestion) return '正在分析，未填写时将自动入库…';
+    if (suggestion.status === 'queued' || suggestion.status === 'running') return '正在分析，未填写时将自动入库…';
     if (suggestion.hasResult) return '已按照片给出建议，可核对后确认';
-    if (suggestion.status === 'succeeded') return '照片不够清楚，建议换一张更清晰的单品照';
-    if (suggestion.status === null) return '尚未分析';
-    return '本次分析未完成，可稍后重试';
+    if (suggestion.status === 'succeeded') return '照片不够清楚或未识别出单品品类，请手动选择品类入库';
+    if (suggestion.status === null) return '尚未分析，可手动选择品类入库';
+    return '本次分析未完成，可手动选择品类或稍后重试';
+  }
+
+  async function addExtraPhotosForDraft(draft: DraftView) {
+    if (busy) return;
+    if (draft.photoCount >= MAX_ITEM_PHOTOS) {
+      toast(`同一件衣服最多保存 ${MAX_ITEM_PHOTOS} 张照片`);
+      return;
+    }
+    const remaining = MAX_ITEM_PHOTOS - draft.photoCount;
+    Alert.alert('为这件衣服补充照片', '可补充背面、领口或面料细节照（同一件衣服，不会新建草稿）。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '拍照补充',
+        onPress: () => {
+          void (async () => {
+            const perm = await ImagePicker.requestCameraPermissionsAsync();
+            if (!perm.granted) {
+              toast('相机权限被拒绝，可改用相册补充');
+              return;
+            }
+            const res = await ImagePicker.launchCameraAsync({ quality: 1, exif: false });
+            if (res.canceled || !res.assets?.length) return;
+            const asset = res.assets[0];
+            try {
+              await addExtraPhotoToItem(draft.id, {
+                sourceUri: asset.uri,
+                sourceWidth: asset.width,
+                sourceHeight: asset.height,
+              });
+              setDrafts((prev) =>
+                prev.map((d) => (d.id === draft.id ? { ...d, photoCount: d.photoCount + 1 } : d)),
+              );
+              toast('已补充 1 张同件照片');
+            } catch (error) {
+              toast(`补充失败：${error instanceof Error ? error.message : String(error)}`);
+            }
+          })();
+        },
+      },
+      {
+        text: '从相册选择',
+        onPress: () => {
+          void (async () => {
+            const res = await ImagePicker.launchImageLibraryAsync({
+              allowsMultipleSelection: true,
+              selectionLimit: remaining,
+              quality: 1,
+              exif: false,
+            });
+            if (res.canceled || !res.assets?.length) return;
+            let added = 0;
+            for (const asset of res.assets) {
+              try {
+                await addExtraPhotoToItem(draft.id, {
+                  sourceUri: asset.uri,
+                  sourceWidth: asset.width,
+                  sourceHeight: asset.height,
+                });
+                added += 1;
+              } catch (error) {
+                toast(`补充失败：${error instanceof Error ? error.message : String(error)}`);
+                break;
+              }
+            }
+            if (added > 0) {
+              setDrafts((prev) =>
+                prev.map((d) => (d.id === draft.id ? { ...d, photoCount: d.photoCount + added } : d)),
+              );
+              toast(`已补充 ${added} 张同件照片`);
+            }
+          })();
+        },
+      },
+    ]);
   }
 
   function renderDraft(draft: DraftView) {
@@ -280,11 +402,22 @@ export default function AddScreen() {
     const nameValue = names[draft.id] ?? suggestion?.name ?? '';
     return (
       <View key={draft.id} style={styles.draftCard}>
-        {draft.thumbUri ? (
-          <Image source={{ uri: draft.thumbUri }} style={styles.draftImage} resizeMode="cover" />
-        ) : (
-          <View style={[styles.draftImage, styles.draftPlaceholder]} />
-        )}
+        <View style={styles.draftMedia}>
+          {draft.thumbUri ? (
+            <Image source={{ uri: draft.thumbUri }} style={styles.draftImage} resizeMode="cover" />
+          ) : (
+            <View style={[styles.draftImage, styles.draftPlaceholder]} />
+          )}
+          <Text style={styles.photoCountText}>{`共 ${draft.photoCount} 张`}</Text>
+          {draft.photoCount < MAX_ITEM_PHOTOS ? (
+            <Button
+              variant="chip"
+              label="+ 补图"
+              onPress={() => void addExtraPhotosForDraft(draft)}
+              style={styles.extraBtn}
+            />
+          ) : null}
+        </View>
         <View style={styles.draftBody}>
           <TextField
             value={nameValue}
@@ -325,8 +458,14 @@ export default function AddScreen() {
       <Text style={[type.titleXL, styles.title]}>从这一件开始。</Text>
       <Text style={styles.subtitle}>不用找尺子，也不用填写一整张表。</Text>
 
-      {drafts.length === 0 ? (
+      {drafts.length === 0 && autoSaved.length === 0 ? (
         <>
+          <View style={styles.guideCard}>
+            <Text style={styles.guideTitle}>示例照片拍摄建议（提升识别与试穿还原度）</Text>
+            <Text style={styles.guideText}>
+              {'• 平整平铺或衣架挂拍，自然白光，背景干净并与衣服颜色有反差\n• 完整展开领口、袖子、下摆与图案（鞋履建议侧面 45° 单双照）\n• 尽量不要用他人上身全身照当主图，以免干扰试穿人物与搭配\n• 同一件衣服支持多张照片：入库时或详情页均可补拍背面与面料细节'}
+            </Text>
+          </View>
           <Button
             variant="primary"
             icon="camera"
@@ -344,13 +483,53 @@ export default function AddScreen() {
             style={styles.full}
           />
           <Text style={styles.subtleInfo}>
-            {'照片保存在本机；只有在你配置了图片理解模型时，才会为分析把这一件的照片发送到你选择的服务。\n品类可以手动确认，也可以参考分析建议后确认。'}
+            {'照片保存在本机；已配置视觉理解模型且未手动填写数据时，分析完成后会自动入库。\n未配置模型或分析未能识别时保留草稿，可手动选择品类确认入库。'}
           </Text>
         </>
       ) : (
         <>
-          <Notice>{`有 ${drafts.length} 份草稿待确认。确认品类即入库；不确认的草稿会一直保留，随时回来继续。`}</Notice>
-          {drafts.map(renderDraft)}
+          {drafts.length > 0 ? (
+            <>
+              <Notice>{`有 ${drafts.length} 份草稿待处理。未填写数据时，模型分析完成后会自动入库；也可直接手动填写并确认。`}</Notice>
+              {drafts.map(renderDraft)}
+            </>
+          ) : null}
+          {autoSaved.length > 0 ? (
+            <>
+              <Notice>{`已自动分析入库 ${autoSaved.length} 件（可在衣橱详情随时修改或确认 AI 识别结果）。`}</Notice>
+              {autoSaved.map((item) => (
+                <View key={item.id} style={styles.autoSavedCard}>
+                  {item.thumbUri ? (
+                    <Image source={{ uri: item.thumbUri }} style={styles.autoSavedImage} resizeMode="cover" />
+                  ) : (
+                    <View style={[styles.autoSavedImage, styles.draftPlaceholder]} />
+                  )}
+                  <View style={styles.autoSavedBody}>
+                    <Text style={styles.autoSavedTitle}>{item.name || item.category || '已入库单品'}</Text>
+                    <Text style={styles.autoSavedMeta}>
+                      {`已自动入库 · ${item.category ?? '未分类'} · AI 识别`}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </>
+          ) : null}
+          <Button
+            variant="secondary"
+            icon="camera"
+            label="继续拍照入库"
+            onPress={takePhoto}
+            disabled={busy}
+            style={styles.full}
+          />
+          <Button
+            variant="secondary"
+            icon="image"
+            label="继续从相册选择"
+            onPress={pickFromLibrary}
+            disabled={busy}
+            style={styles.full}
+          />
           <Button variant="primary" label="完成，回衣橱" onPress={() => router.back()} style={styles.full} />
         </>
       )}
@@ -382,7 +561,37 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   uploadGap: {
-    marginTop: 20,
+    marginTop: 14,
+  },
+  guideCard: {
+    marginTop: 16,
+    padding: 12,
+    borderRadius: radius.notice,
+    backgroundColor: colors.soft,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  guideTitle: {
+    ...type.sectionHead,
+    color: colors.ink,
+    marginBottom: 6,
+  },
+  guideText: {
+    ...type.footnote,
+    color: colors.muted,
+    lineHeight: 19,
+  },
+  draftMedia: {
+    width: 96,
+    alignItems: 'center',
+  },
+  photoCountText: {
+    ...type.footnote,
+    color: colors.muted,
+    marginTop: 4,
+  },
+  extraBtn: {
+    marginTop: 4,
   },
   full: {
     alignSelf: 'stretch',
@@ -438,5 +647,35 @@ const styles = StyleSheet.create({
   },
   confirmGap: {
     marginTop: 10,
+  },
+  autoSavedCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 10,
+    borderRadius: radius.notice,
+    backgroundColor: colors.soft,
+    marginBottom: 10,
+  },
+  autoSavedImage: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.small,
+    backgroundColor: colors.artBg,
+  },
+  autoSavedBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  autoSavedTitle: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
+    color: colors.ink,
+  },
+  autoSavedMeta: {
+    ...type.footnote,
+    color: colors.tagText,
+    marginTop: 3,
   },
 });

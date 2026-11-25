@@ -34,22 +34,26 @@ export interface CheckerVerdict {
 const STATUS_VALUES: PreviewItemVerdictStatus[] = ['match', 'deviate', 'unknown'];
 const OVERALL_VALUES: PreviewCheckOverall[] = ['match', 'minor', 'major'];
 
+/** 人物一致性独立判定的保留 itemId（复用 verdicts_json 落库，兼容既有 schema 与旧记录） */
+export const PERSON_VERDICT_ID = '__person__';
+
 export function checkerSystemPrompt(): string {
   return [
     '你是穿搭生成结果的核对器。你会按顺序收到多张图：',
     '先是本次方案各单品的原始照片（数量与顺序见约束清单的图号标注，个别单品可能缺图），',
     '然后是用户本人的人物参考照，最后一张是 AI 生成的上身预览结果。',
     '任务：对照单品原图、人物参考与约束清单，只检查生成结果里可见且影响选择的特征：',
+    '- 人物一致性（单独判定）：生成图中的人物脸部五官、发型、肤色、体型比例是否与人物参考照明显不符',
     '- 漏件/多件（清单里的每件衣物是否都出现在结果中，有没有多余衣物）',
     '- 颜色或图案明显改变',
     '- 领型/袖型/长度/开合等关键特征明显错误',
     '- 穿法/层次不符（如外套没有敞开、下摆没有塞入；逐件穿法以清单标注为准）',
-    '- 人物脸部/体型与参考照明显不符',
     '输出紧凑 JSON，不要解释文字、不要代码围栏。结构：',
-    '{"items":[{"itemId":"约束里的单品ID","status":"match|deviate|unknown","note":"一句话（可选）"}],"overall":"match|minor|major"}',
+    '{"person":{"status":"match|deviate|unknown","note":"一句话（可选）"},"items":[{"itemId":"约束里的单品ID","status":"match|deviate|unknown","note":"一句话（可选）"}],"overall":"match|minor|major"}',
     '判定规则：',
-    '- 每个itemId都给一条判定；看不清/被遮挡/该件缺原图/证据不足时用 unknown，不要猜。',
-    '- overall：match=关键特征都符合；minor=有差异但不影响选衣判断；major=漏件/整件被换成别的衣服/主要颜色或图案错误/人物明显变化。',
+    '- person 单独判定人物一致性；未附人物参考照或面部/体型看不清时给 unknown，明显变脸/换人/体型失真时给 deviate 且 overall 必须为 major。',
+    '- 每个 itemId 都给一条判定；看不清/被遮挡/该件缺原图/证据不足时用 unknown，不要猜。',
+    '- overall：match=人物与关键单品特征都符合；minor=有轻微差异但不影响选衣判断；major=人物明显变化/漏件/整件被换成别的衣服/主要颜色或图案错误。',
     '- 单品原图中没有的特征（如侧面内部结构）不作为判定依据。',
   ].join('\n');
 }
@@ -70,7 +74,7 @@ export function checkerUserPrompt(input: { items: CheckerConstraintItem[]; wearS
     ...lines,
     wear,
     `附图共 ${attached} 张单品原图（清单中标注了对应图号）+ 人物参考照 + AI 生成结果。`,
-    `请按 system 要求的 JSON 结构输出 ${input.items.length} 条单品判定与 overall；未附原图的单品给 unknown。`,
+    `请按 system 要求的 JSON 结构输出 person（人物一致性独立判定）、${input.items.length} 条单品判定与 overall；未附原图的单品给 unknown。`,
   ].join('\n');
 }
 
@@ -79,10 +83,27 @@ export function parseCheckerVerdict(value: unknown, expectedItemIds: string[]): 
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { ok: false, error: '核对结果不是 JSON 对象' };
   }
-  const raw = value as { items?: unknown; overall?: unknown };
+  const raw = value as { person?: unknown; items?: unknown; overall?: unknown };
   if (!Array.isArray(raw.items)) return { ok: false, error: '核对结果缺少 items' };
   const expected = new Set(expectedItemIds);
   const verdicts: PreviewItemVerdict[] = [];
+
+  // 人物一致性独立判定（可选：兼容旧模型未输出 person 字段的情况；提供时严格校验）
+  if (raw.person !== undefined) {
+    if (!raw.person || typeof raw.person !== 'object' || Array.isArray(raw.person)) {
+      return { ok: false, error: '核对结果 person 不是对象' };
+    }
+    const p = raw.person as { status?: unknown; note?: unknown };
+    if (typeof p.status !== 'string' || !STATUS_VALUES.includes(p.status as PreviewItemVerdictStatus)) {
+      return { ok: false, error: `人物判定状态非法：${String(p.status).slice(0, 20)}` };
+    }
+    verdicts.push({
+      itemId: PERSON_VERDICT_ID,
+      status: p.status as PreviewItemVerdictStatus,
+      ...(typeof p.note === 'string' && p.note.trim() ? { note: p.note.trim().slice(0, 120) } : null),
+    });
+  }
+
   const seen = new Set<string>();
   for (const item of raw.items) {
     const v = item as { itemId?: unknown; status?: unknown; note?: unknown };
@@ -108,7 +129,7 @@ export function parseCheckerVerdict(value: unknown, expectedItemIds: string[]): 
     return { ok: false, error: `overall 非法：${String(raw.overall).slice(0, 20)}` };
   }
   let overall = raw.overall as PreviewCheckOverall;
-  // 本地一致性防线：存在明确偏离时不得登记为 match
+  // 本地一致性防线：存在明确偏离（含人物或单品）时不得登记为 match
   if (overall === 'match' && verdicts.some((v) => v.status === 'deviate')) overall = 'minor';
   return { ok: true, value: { overall, verdicts } };
 }
@@ -123,15 +144,23 @@ export function parseCheckerContent(
   return parseCheckerVerdict(parsed.value, expectedItemIds);
 }
 
-/** 从偏离判定推导纠偏约束（C8 有界纠偏）：只用快照里已有的证据重申，不发明新特征 */
+/** 从偏离判定推导纠偏约束（C8 有界纠偏）：人物一致性偏离优先独立约束，单品只用快照内已有证据重申 */
 export function buildCorrections(
   verdicts: PreviewItemVerdict[],
   items: CheckerConstraintItem[],
 ): string[] {
   const byId = new Map(items.map((item) => [item.itemId, item]));
   const corrections: string[] = [];
+
+  const personVerdict = verdicts.find((v) => v.itemId === PERSON_VERDICT_ID);
+  if (personVerdict && personVerdict.status === 'deviate') {
+    corrections.push(
+      `「人物一致性」在上一张结果中明显偏离（核对意见：${personVerdict.note ?? '人物外观或体型与参考照不符'}），本次必须严格保持图1本人的脸部五官、发型、肤色、体型与身高比例，不得改变人物外观`,
+    );
+  }
+
   for (const verdict of verdicts) {
-    if (verdict.status !== 'deviate') continue;
+    if (verdict.itemId === PERSON_VERDICT_ID || verdict.status !== 'deviate') continue;
     const item = byId.get(verdict.itemId);
     if (!item) continue;
     const identity = [

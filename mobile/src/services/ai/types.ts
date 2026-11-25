@@ -4,14 +4,20 @@
 // - 配置成功 ≠ 接口可访问 ≠ 具备某项业务能力，三种状态分开记录
 // - 名称与模型 ID 是两个字段（2026-10-27 项目用户确认）
 
-export type UrlKind = 'openai' | 'minimax';
+export type UrlKind = 'openai' | 'openai_images' | 'minimax';
 
 export type AiCapability = 'text' | 'vision' | 'image_gen';
 
 export const urlKindLabels: Record<UrlKind, string> = {
   openai: 'OpenAI 兼容',
+  openai_images: 'OpenAI 图像兼容',
   minimax: 'MiniMax 图像',
 };
+
+/** 是否属于图像生成协议类型（上身预览与连接测试共用，避免各处硬编码厂商判断） */
+export function isImageGenUrlKind(kind: UrlKind): boolean {
+  return kind === 'openai_images' || kind === 'minimax';
+}
 
 export const capabilityLabels: Record<AiCapability, string> = {
   text: '文本',
@@ -86,12 +92,19 @@ export function isVisionCandidate(config: ModelConfig): boolean {
 }
 
 /**
- * 实际请求地址（2026-11-03 项目用户确认调整）：
+ * 实际请求地址：
  * - openai：baseUrl 填到版本号为止（如 https://api.openai.com/v1），自动拼接 /chat/completions；
+ * - openai_images：支持基础地址（如 https://ark.cn-beijing.volces.com/api/v3，自动拼接 /images/generations）
+ *   或直接填写含 /images/generations、/images/edits 尾段的完整地址（原样使用，不重复拼接）；
  * - minimax：baseUrl 即完整图像生成接口地址（如 https://api.minimax.cn/v1/image_generation），不再自动拼接——
  *   不同图像服务的接口路径可能完全不同，自动补路径会产生 /v1/v1/... 这类错误地址（真机 404 实证）。
  */
 export function endpointFor(kind: UrlKind, baseUrl: string): string {
   const base = baseUrl.replace(/\/+$/, '');
-  return kind === 'openai' ? `${base}/chat/completions` : base;
+  if (kind === 'openai') return `${base}/chat/completions`;
+  if (kind === 'openai_images') {
+    if (/\/images\/(generations|edits)$/.test(base)) return base;
+    return `${base}/images/generations`;
+  }
+  return base;
 }

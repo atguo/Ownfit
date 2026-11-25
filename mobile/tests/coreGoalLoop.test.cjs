@@ -1,4 +1,4 @@
-// 核心目标能力改进回归（2026-11-04，docs/plans/2026-11-04-核心目标能力改进-落地计划与决策记录.md）。
+// 核心目标能力改进回归（2026-11-04，docs/plans/archive/核心目标能力改进/2026-11-04-核心目标能力改进-落地计划与决策记录.md）。
 // 覆盖：
 // - B3 本地可执行校验（normalizeRecommendation：重复单品/槽位、连衣裙冲突、包配饰拒绝、
 //   锁定覆盖、相同组合去重）
@@ -410,6 +410,40 @@ test('C8：核对解析（缺判定补 unknown、overall 一致性防线、结�
   assert.equal(corrections.length, 1);
   assert.match(corrections[0], /外套（黑大衣）/);
   assert.match(corrections[0], /图案变成波点/);
+
+  // 人物一致性独立核对与优先纠偏
+  const { PERSON_VERDICT_ID } = createLoader(createMemoryAdapter().adapter)(PREVIEW_CHECKER);
+  const personDev = parseCheckerVerdict(
+    {
+      person: { status: 'deviate', note: '脸部五官改变且身形变瘦' },
+      items: [{ itemId: 'real-1', status: 'match' }],
+      overall: 'match',
+    },
+    ['real-1'],
+  );
+  assert.ok(personDev.ok);
+  assert.equal(personDev.value.overall, 'minor', '人物偏离时 overall 不得为 match');
+  assert.ok(
+    personDev.value.verdicts.some((v) => v.itemId === PERSON_VERDICT_ID && v.status === 'deviate'),
+    '人物独立判定应写入 verdicts',
+  );
+  const personBad = parseCheckerVerdict(
+    { person: { status: 'bad' }, items: [{ itemId: 'real-1', status: 'match' }], overall: 'major' },
+    ['real-1'],
+  );
+  assert.equal(personBad.ok, false, '非法人物状态应拒绝');
+
+  const personCorrections = buildCorrections(
+    [
+      { itemId: PERSON_VERDICT_ID, status: 'deviate', note: '脸部五官改变' },
+      { itemId: 'real-2', status: 'deviate', note: '颜色变蓝' },
+    ],
+    [{ itemId: 'real-2', name: '黑大衣', category: '外套', mainColor: { name: '黑', hex: '#111111' }, keyFeatures: [] }],
+  );
+  assert.equal(personCorrections.length, 2);
+  assert.match(personCorrections[0], /人物一致性/, '人物偏离纠偏应排在首位');
+  assert.match(personCorrections[0], /脸部五官改变/);
+  assert.match(personCorrections[1], /黑大衣/);
 });
 
 // ---------------------------------------------------------------------------

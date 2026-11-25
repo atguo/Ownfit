@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Sheet } from '../../ui/components/Sheet';
 import { ChoiceRow } from '../../ui/components/Rows';
@@ -7,7 +7,7 @@ import { Notice } from '../../ui/components/Basics';
 import { Button } from '../../ui/components/Button';
 import { Field, TextField } from '../../ui/components/Field';
 import { useToast } from '../../ui/components/Toast';
-import { colors, type } from '../../ui/tokens';
+import { colors, radius, type } from '../../ui/tokens';
 import {
   getBodyProfile,
   getPreferences,
@@ -16,12 +16,17 @@ import {
   setPreferences,
 } from '../../data/repositories/settingsRepository';
 import {
+  addPreviewReferencePhoto,
+  allReferencePaths,
   getPreviewReference,
+  MAX_PERSON_REFERENCE_PHOTOS,
   removePreviewReference,
-  savePreviewReference,
+  removePreviewReferencePhoto,
   setPreviewReferenceKind,
+  setPrimaryPreviewReferencePhoto,
   type PreviewReference,
 } from '../../data/repositories/previewRepository';
+import { photoUri } from '../../data/repositories/photoRepository';
 import { resetDemo, setPrefs, useDemoStore } from '../demoStore';
 import { prefOptions } from '../../data/demo';
 
@@ -79,55 +84,139 @@ export function PreferencesSheet({ visible, onClose }: { visible: boolean; onClo
   );
 }
 
-// 人物参考（M5 真实版）：相册选肖像照，压缩后存本机私有目录；
+// 人物参考（支持同一人多张参考照，最多 4 张）：相册选图或拍照，压缩后存本机私有目录；
 // 仅在生成上身预览时发送给用户手动配置的图像生成服务，不作他用。
 export function ReferenceSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const toast = useToast();
   const [reference, setRef] = useState<PreviewReference | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (visible) void getPreviewReference().then(setRef);
+    if (visible) {
+      void getPreviewReference().then((loaded) => {
+        setRef(loaded);
+        setSelectedPath(loaded?.path ?? null);
+      });
+    }
   }, [visible]);
 
-  async function pick() {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      toast('需要相册权限才能选择参考照');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      quality: 1,
-      exif: false,
-      allowsMultipleSelection: false,
-    });
-    if (result.canceled || result.assets.length === 0) return;
-    const asset = result.assets[0];
+  const paths = reference ? allReferencePaths(reference) : [];
+  const activePath = selectedPath && paths.includes(selectedPath) ? selectedPath : (paths[0] ?? null);
+  const canAddMore = paths.length < MAX_PERSON_REFERENCE_PHOTOS;
+
+  async function savePickedAssets(assets: ImagePicker.ImagePickerAsset[]) {
     setBusy(true);
     try {
-      const saved = await savePreviewReference({
-        sourceUri: asset.uri,
-        sourceWidth: asset.width ?? 0,
-        sourceHeight: asset.height ?? 0,
-      });
-      setRef(saved);
-      toast('人物参考已保存，仅存本机');
-    } catch (error) {
-      toast(`保存失败：${error instanceof Error ? error.message : String(error)}`);
+      let latest = reference;
+      let added = 0;
+      for (const asset of assets) {
+        try {
+          latest = await addPreviewReferencePhoto({
+            sourceUri: asset.uri,
+            sourceWidth: asset.width ?? 0,
+            sourceHeight: asset.height ?? 0,
+          });
+          added += 1;
+        } catch (error) {
+          toast(error instanceof Error ? error.message : '保存失败');
+          break;
+        }
+      }
+      if (latest) {
+        setRef(latest);
+        const nextPaths = allReferencePaths(latest);
+        setSelectedPath(nextPaths[nextPaths.length - 1] ?? latest.path);
+      }
+      if (added > 0) {
+        toast(added > 1 ? `已添加 ${added} 张人物参考照（仅存本机）` : '人物参考已保存，仅存本机');
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  async function remove() {
+  async function pickFromAlbum() {
+    if (!canAddMore) {
+      toast(`最多保存 ${MAX_PERSON_REFERENCE_PHOTOS} 张人物参考照`);
+      return;
+    }
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      toast('需要相册权限才能选择参考照');
+      return;
+    }
+    const remaining = MAX_PERSON_REFERENCE_PHOTOS - paths.length;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 1,
+      exif: false,
+      allowsMultipleSelection: remaining > 1,
+      selectionLimit: remaining,
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    await savePickedAssets(result.assets.slice(0, remaining));
+  }
+
+  async function takePhoto() {
+    if (!canAddMore) {
+      toast(`最多保存 ${MAX_PERSON_REFERENCE_PHOTOS} 张人物参考照`);
+      return;
+    }
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      toast('相机权限被拒绝，可改用从相册选择');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ quality: 1, exif: false });
+    if (result.canceled || result.assets.length === 0) return;
+    await savePickedAssets([result.assets[0]]);
+  }
+
+  async function setPrimary(path: string) {
     setBusy(true);
     try {
-      await removePreviewReference();
-      setRef(null);
-      toast('已移除人物参考');
+      const next = await setPrimaryPreviewReferencePhoto(path);
+      setRef(next);
+      setSelectedPath(path);
+      toast('已设为主参考照');
     } finally {
       setBusy(false);
     }
+  }
+
+  async function removeOne(path: string) {
+    setBusy(true);
+    try {
+      const next = await removePreviewReferencePhoto(path);
+      setRef(next);
+      setSelectedPath(next?.path ?? null);
+      toast(next ? '已删除该张参考照' : '已移除全部人物参考');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function confirmRemoveAll() {
+    Alert.alert('移除全部人物参考照？', '所有参考照文件将从本机删除，可随时重新添加。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '移除',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            setBusy(true);
+            try {
+              await removePreviewReference();
+              setRef(null);
+              setSelectedPath(null);
+              toast('已移除全部人物参考');
+            } finally {
+              setBusy(false);
+            }
+          })();
+        },
+      },
+    ]);
   }
 
   // C3：声明参考视角——面部特写 vs 全身照的可用证据不同（脸部照不假定模型知道身材）
@@ -147,15 +236,62 @@ export function ReferenceSheet({ visible, onClose }: { visible: boolean; onClose
     <Sheet visible={visible} title="你的参考，由你决定。" onClose={onClose}>
       <Text style={styles.description}>
         {reference
-          ? '已保存人物参考照（仅存本机私有目录）。生成上身预览时，才会把它发送到你手动配置的图像生成服务。'
-          : '生成上身预览需要一张你本人的正面照片作参考：只存本机，仅发送给你手动配置的图像生成服务，不作他用。'}
+          ? `已保存 ${paths.length}/${MAX_PERSON_REFERENCE_PHOTOS} 张人物参考照（仅存本机私有目录）。支持同一人多张（如正面全身照 + 面部近景照），多图模型会一并参考以提升五官与体型还原度。`
+          : '生成上身预览需要你本人的正面照片作参考：只存本机，仅发送给你手动配置的图像生成服务，支持同一人添加多张。'}
       </Text>
-      {reference ? (
-        <Notice>{`已准备（${reference.updatedAt.slice(0, 10)}）。更换会覆盖旧参考并使旧预览过时。`}</Notice>
+
+      <View style={styles.guideCard}>
+        <Text style={styles.guideTitle}>示例参考照拍摄标准（防裁腿、防换脸）</Text>
+        <Text style={styles.guideText}>
+          {'• 竖屏全身照（2:3 或 3:4）：头顶与脚底留少许空白，镜头齐胸/腰平拍\n• 正面自然站立、双手微离身侧（不抱臂、不插兜、不对镜挡脸）\n• 穿合身简洁的日常打底，避免大羽绒服或廓形外套遮挡真实体型\n• 推荐多张组合：图 1 放正面全身照（设为主参考），图 2 补清晰面部近景照'}
+        </Text>
+      </View>
+
+      {activePath ? (
+        <View style={styles.refGallery}>
+          <Image
+            source={{ uri: photoUri(activePath) }}
+            style={styles.refPreview}
+            resizeMode="contain"
+            accessibilityLabel="当前选中的人物参考照"
+          />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbRow}>
+            {paths.map((p, idx) => {
+              const isSelected = p === activePath;
+              const isPrimary = idx === 0;
+              return (
+                <Pressable
+                  key={p}
+                  onPress={() => setSelectedPath(p)}
+                  style={[styles.thumbWrap, isSelected && styles.thumbSelected]}>
+                  <Image source={{ uri: photoUri(p) }} style={styles.thumbImg} resizeMode="cover" />
+                  <Text style={styles.thumbLabel}>{isPrimary ? '主参考' : `图 ${idx + 1}`}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          <View style={styles.refActions}>
+            {activePath !== reference?.path ? (
+              <Button
+                variant="chip"
+                label="设为主参考"
+                onPress={() => void setPrimary(activePath)}
+                disabled={busy}
+              />
+            ) : null}
+            <Button
+              variant="chip"
+              label="删除此张"
+              onPress={() => void removeOne(activePath)}
+              disabled={busy}
+            />
+          </View>
+        </View>
       ) : null}
+
       {reference ? (
         <View>
-          <Text style={styles.kindLabel}>这张参考是（用于生成时如实说明证据范围）：</Text>
+          <Text style={styles.kindLabel}>主参考视角（用于生成时如实说明证据范围）：</Text>
           <View style={styles.kindRow}>
             <Button
               variant="chip"
@@ -173,18 +309,32 @@ export function ReferenceSheet({ visible, onClose }: { visible: boolean; onClose
             />
           </View>
           {reference.kind === 'face' ? (
-            <Notice>面部特写只能保留长相；生成图的身材比例由模型推断，可能与本人不同，不会用于合身判断。</Notice>
+            <Notice>面部特写只能保留长相；建议再补充一张全身照并设为主参考，以获得更准确的身材比例。</Notice>
           ) : null}
         </View>
       ) : null}
-      <Button
-        variant="primary"
-        label={busy ? '处理中…' : reference ? '更换参考照' : '从相册选择'}
-        onPress={() => void pick()}
-        disabled={busy}
-      />
+
+      {canAddMore ? (
+        <View style={styles.addRow}>
+          <Button
+            variant="primary"
+            label={busy ? '处理中…' : reference ? `从相册添加（${paths.length}/${MAX_PERSON_REFERENCE_PHOTOS}）` : '从相册选择（可多选）'}
+            onPress={() => void pickFromAlbum()}
+            disabled={busy}
+          />
+          <Button
+            variant="secondary"
+            label="拍照添加"
+            onPress={() => void takePhoto()}
+            disabled={busy}
+            style={styles.full}
+          />
+        </View>
+      ) : (
+        <Notice>{`已达到上限（${MAX_PERSON_REFERENCE_PHOTOS} 张），如需更换请先删除其中一张。`}</Notice>
+      )}
       {reference ? (
-        <Button variant="text" label="移除参考照" onPress={() => void remove()} disabled={busy} style={styles.full} />
+        <Button variant="text" label="清空全部参考照" onPress={confirmRemoveAll} disabled={busy} style={styles.full} />
       ) : null}
       <Button variant="text" label="返回" onPress={onClose} />
     </Sheet>
@@ -351,5 +501,71 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     marginBottom: 8,
+  },
+  guideCard: {
+    padding: 12,
+    borderRadius: radius.notice,
+    backgroundColor: colors.soft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    marginBottom: 12,
+  },
+  guideTitle: {
+    ...type.sectionHead,
+    color: colors.ink,
+    marginBottom: 6,
+  },
+  guideText: {
+    ...type.footnote,
+    color: colors.muted,
+    lineHeight: 19,
+  },
+  refGallery: {
+    marginBottom: 12,
+  },
+  refPreview: {
+    width: '100%',
+    height: 220,
+    borderRadius: radius.small,
+    backgroundColor: colors.artBg,
+    marginBottom: 8,
+  },
+  thumbRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 2,
+  },
+  thumbWrap: {
+    width: 64,
+    alignItems: 'center',
+    borderRadius: radius.small,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 3,
+    backgroundColor: colors.soft,
+  },
+  thumbSelected: {
+    borderColor: colors.green,
+    borderWidth: 2,
+  },
+  thumbImg: {
+    width: 56,
+    height: 56,
+    borderRadius: 6,
+    backgroundColor: colors.artBg,
+  },
+  thumbLabel: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: colors.muted,
+    marginTop: 2,
+  },
+  refActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  addRow: {
+    marginTop: 6,
   },
 });

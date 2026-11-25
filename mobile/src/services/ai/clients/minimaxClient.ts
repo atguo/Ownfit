@@ -42,9 +42,11 @@ export function h3EndpointFor(baseUrl: string, withImages: boolean): string {
 
 export interface ImageGenInput {
   prompt: string;
-  /** 人物参考照（data URL）。H3 时作为图 1；image-01 时走 subject_reference。 */
+  /** 人物主参考照（data URL）。H3/OpenAI 图像兼容时作为图 1；image-01 时走 subject_reference。 */
   personImage?: string;
-  /** 衣物实拍参考图（data URL，H3 专用；image-01 不支持衣物参考，传入时仍按旧协议发送文字特征）。 */
+  /** 同一个人的补充参考照（如面部近景/侧面照，仅多图参考模型使用；image-01 忽略）。 */
+  extraPersonImages?: string[];
+  /** 衣物实拍参考图（data URL，多图参考模型使用；image-01 忽略）。 */
   garmentImages?: string[];
   aspectRatio?: '1:1' | '2:3' | '3:4' | '9:16' | string;
   n?: number;
@@ -61,8 +63,9 @@ export async function generateImage(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const h3 = isH3ImageModel(config.modelId);
   try {
+    const extraPersonImages = (input.extraPersonImages ?? []).filter(Boolean);
     const garmentImages = (input.garmentImages ?? []).filter(Boolean);
-    const referenceImages = [input.personImage, ...garmentImages].filter(Boolean) as string[];
+    const referenceImages = [input.personImage, ...extraPersonImages, ...garmentImages].filter(Boolean) as string[];
     const response = await fetch(h3 ? h3EndpointFor(config.baseUrl, referenceImages.length > 0) : endpointFor(config.urlKind, config.baseUrl), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },

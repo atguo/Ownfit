@@ -5,11 +5,21 @@
 // 规则依据分批执行手册 R2/R5 与衣橱功能文档；未知显式表达不冒充。
 
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Image, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { Sheet } from '../../ui/components/Sheet';
 import { Button } from '../../ui/components/Button';
 import { Field, TextField } from '../../ui/components/Field';
 import { useToast } from '../../ui/components/Toast';
+import {
+  addExtraPhotoToItem,
+  deleteExtraPhotoFromItem,
+  listPhotosForItem,
+  MAX_ITEM_PHOTOS,
+  photoUri,
+  setMainPhotoForItem,
+  type SavedPhoto,
+} from '../../data/repositories/photoRepository';
 import {
   archiveItem,
   confirmItem,
@@ -103,6 +113,9 @@ export function WardrobeItemSheet({
   const [category, setCategory] = useState<ItemCategory | undefined>();
 
   const [analysis, setAnalysis] = useState<AnalysisView | null>(null);
+  const [photos, setPhotos] = useState<SavedPhoto[]>([]);
+  const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [modelCandidates, setModelCandidates] = useState<ModelConfig[] | null>(null);
   const [attrEditing, setAttrEditing] = useState<{ name: string; value: string } | null>(null);
   const [newAttr, setNewAttr] = useState<{ name: string; value: string } | null>(null);
@@ -131,17 +144,26 @@ export function WardrobeItemSheet({
     setAnalysis(await getAnalysisView(id));
   }, []);
 
+  const loadPhotos = useCallback(async (id: string) => {
+    const list = await listPhotosForItem(id);
+    setPhotos(list);
+    setSelectedPhotoId((prev) => (prev && list.some((p) => p.id === prev) ? prev : (list[0]?.id ?? null)));
+  }, []);
+
   useEffect(() => {
     if (!itemId) {
       setAnalysis(null);
+      setPhotos([]);
+      setSelectedPhotoId(null);
       return;
     }
     void loadAnalysis(itemId);
+    void loadPhotos(itemId);
     // 任务/属性在后台变化时刷新展示，但不改动用户正在编辑的字段
     return subscribeAnalysisChanges(() => {
       void loadAnalysis(itemId);
     });
-  }, [itemId, loadAnalysis]);
+  }, [itemId, loadAnalysis, loadPhotos]);
 
   const isDraft = item?.status === 'draft';
   const isArchived = item?.status === 'archived';
@@ -438,6 +460,124 @@ export function WardrobeItemSheet({
     analysis?.latestTask?.status === 'stale' ||
     analysis?.latestTask?.status === 'blocked';
 
+  const activePhoto = photos.find((p) => p.id === selectedPhotoId) ?? photos[0] ?? null;
+  const displayOriginalUri = activePhoto ? photoUri(activePhoto.originalPath) : (detail?.originalUri ?? null);
+  const canAddMorePhotos = photos.length < MAX_ITEM_PHOTOS;
+
+  function promptAddItemPhotos() {
+    if (!item || photoBusy) return;
+    if (!canAddMorePhotos) {
+      toast(`同一件衣服最多保存 ${MAX_ITEM_PHOTOS} 张照片`);
+      return;
+    }
+    const remaining = MAX_ITEM_PHOTOS - photos.length;
+    Alert.alert(
+      '补充同件衣服照片',
+      '可拍摄背面、领口、标签或面料细节（自然白光下平铺/挂拍更佳）。',
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '拍照添加',
+          onPress: () => {
+            void (async () => {
+              const perm = await ImagePicker.requestCameraPermissionsAsync();
+              if (!perm.granted) {
+                toast('相机权限被拒绝，可改用从相册选择');
+                return;
+              }
+              const res = await ImagePicker.launchCameraAsync({ quality: 1, exif: false });
+              if (res.canceled || !res.assets?.length) return;
+              const asset = res.assets[0];
+              setPhotoBusy(true);
+              try {
+                const added = await addExtraPhotoToItem(item.id, {
+                  sourceUri: asset.uri,
+                  sourceWidth: asset.width,
+                  sourceHeight: asset.height,
+                });
+                await loadPhotos(item.id);
+                setSelectedPhotoId(added.id);
+                onChanged();
+                toast('已添加 1 张补充照片');
+              } catch (error) {
+                toast(`添加失败：${error instanceof Error ? error.message : String(error)}`);
+              } finally {
+                setPhotoBusy(false);
+              }
+            })();
+          },
+        },
+        {
+          text: '从相册选择',
+          onPress: () => {
+            void (async () => {
+              const res = await ImagePicker.launchImageLibraryAsync({
+                allowsMultipleSelection: remaining > 1,
+                selectionLimit: remaining,
+                quality: 1,
+                exif: false,
+              });
+              if (res.canceled || !res.assets?.length) return;
+              setPhotoBusy(true);
+              try {
+                let addedCount = 0;
+                let lastId: string | null = null;
+                for (const asset of res.assets.slice(0, remaining)) {
+                  const added = await addExtraPhotoToItem(item.id, {
+                    sourceUri: asset.uri,
+                    sourceWidth: asset.width,
+                    sourceHeight: asset.height,
+                  });
+                  addedCount += 1;
+                  lastId = added.id;
+                }
+                await loadPhotos(item.id);
+                if (lastId) setSelectedPhotoId(lastId);
+                onChanged();
+                if (addedCount > 0) toast(`已添加 ${addedCount} 张补充照片`);
+              } catch (error) {
+                toast(`添加失败：${error instanceof Error ? error.message : String(error)}`);
+              } finally {
+                setPhotoBusy(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }
+
+  async function makeActivePhotoMain() {
+    if (!item || !activePhoto || activePhoto.kind === 'main' || photoBusy) return;
+    setPhotoBusy(true);
+    try {
+      await setMainPhotoForItem(item.id, activePhoto.id);
+      await loadPhotos(item.id);
+      notifyAnalysisChanged();
+      onChanged();
+      toast('已设为主图（后续识别与试穿将优先使用此图）');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '设置主图失败');
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
+  async function removeActivePhoto() {
+    if (!item || !activePhoto || activePhoto.kind === 'main' || photoBusy) return;
+    setPhotoBusy(true);
+    try {
+      await deleteExtraPhotoFromItem(item.id, activePhoto.id);
+      await loadPhotos(item.id);
+      onChanged();
+      toast('已删除该张补充照片');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '删除失败');
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
   return (
     <Sheet visible={item != null} title={item?.name ?? '单品详情'} onClose={onClose}>
       {item ? (
@@ -445,14 +585,59 @@ export function WardrobeItemSheet({
           {isDraft ? <Text style={styles.statusNote}>草稿 · 确认品类后入库</Text> : null}
           {isArchived ? <Text style={styles.statusNote}>已归档 · 不出现在衣橱列表</Text> : null}
 
-          {detail?.originalUri ? (
+          {displayOriginalUri ? (
             <Image
-              source={{ uri: detail.originalUri }}
+              source={{ uri: displayOriginalUri }}
               style={styles.photo}
               resizeMode="cover"
               accessibilityLabel={item.name ?? '单品照片'}
             />
           ) : null}
+
+          <View style={styles.photoGallery}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoThumbRow}>
+              {photos.map((photo, idx) => {
+                const selected = photo.id === activePhoto?.id;
+                return (
+                  <Pressable
+                    key={photo.id}
+                    onPress={() => setSelectedPhotoId(photo.id)}
+                    style={[styles.photoThumbWrap, selected && styles.photoThumbSelected]}>
+                    <Image source={{ uri: photoUri(photo.thumbPath) }} style={styles.photoThumbImg} resizeMode="cover" />
+                    <Text style={styles.photoThumbLabel}>{photo.kind === 'main' ? '主图' : `图 ${idx + 1}`}</Text>
+                  </Pressable>
+                );
+              })}
+              {canAddMorePhotos ? (
+                <Pressable
+                  onPress={promptAddItemPhotos}
+                  disabled={photoBusy}
+                  style={styles.photoAddTile}>
+                  <Text style={styles.photoAddPlus}>+</Text>
+                  <Text style={styles.photoThumbLabel}>{`${photos.length}/${MAX_ITEM_PHOTOS}`}</Text>
+                </Pressable>
+              ) : null}
+            </ScrollView>
+            {activePhoto && activePhoto.kind !== 'main' ? (
+              <View style={styles.photoActionRow}>
+                <Button
+                  variant="chip"
+                  label="设为主图"
+                  onPress={() => void makeActivePhotoMain()}
+                  disabled={photoBusy}
+                />
+                <Button
+                  variant="chip"
+                  label="删除此图"
+                  onPress={() => void removeActivePhoto()}
+                  disabled={photoBusy}
+                />
+              </View>
+            ) : null}
+            <Text style={styles.sourceNote}>
+              {`同一件衣服最多存 ${MAX_ITEM_PHOTOS} 张（主图 + 背面/细节图）；建议自然白光平铺或挂拍，识别与试穿以主图为准。`}
+            </Text>
+          </View>
 
           <Field label="名称（可选）">
             <TextField value={name} onChangeText={setName} maxLength={30} placeholder="给它一个名字" />
@@ -858,5 +1043,59 @@ const styles = StyleSheet.create({
   gap: {
     alignSelf: 'stretch',
     marginTop: 10,
+  },
+  photoGallery: {
+    marginBottom: 12,
+  },
+  photoThumbRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  photoThumbWrap: {
+    width: 60,
+    alignItems: 'center',
+    borderRadius: radius.small,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 3,
+    backgroundColor: colors.soft,
+  },
+  photoThumbSelected: {
+    borderColor: colors.green,
+    borderWidth: 2,
+  },
+  photoThumbImg: {
+    width: 52,
+    height: 52,
+    borderRadius: 6,
+    backgroundColor: colors.artBg,
+  },
+  photoThumbLabel: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: colors.muted,
+    marginTop: 2,
+  },
+  photoAddTile: {
+    width: 60,
+    height: 74,
+    borderRadius: radius.small,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.soft,
+  },
+  photoAddPlus: {
+    fontSize: 20,
+    lineHeight: 24,
+    color: colors.ink,
+  },
+  photoActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
   },
 });

@@ -269,6 +269,49 @@ test('读写路径：增改删落库并同步镜像；测试结果不影响 call
   }
 });
 
+// 锁定 2026-11-13 真机缺陷：更新必须换新数组引用（原地改写会让列表页
+// focus 重读 setConfigs 判同跳过渲染，编辑后显示旧 modelId 直到重启）。
+test('镜像引用：增改删都产生新数组引用，页面重读可触发渲染', async () => {
+  const ctx = await setup({ jsonConfigs: [] });
+  try {
+    await ctx.configStore.ensureConfigCache();
+    const empty = ctx.configStore.loadConfigs();
+
+    const created = await ctx.configStore.addConfig({
+      name: 'GLM',
+      urlKind: 'openai',
+      baseUrl: 'https://api.example.com/v1',
+      modelId: 'glm-4v',
+      capabilities: ['vision'],
+      apiKey: 'sk-1',
+    });
+    const afterAdd = ctx.configStore.loadConfigs();
+    assert.notEqual(afterAdd, empty, '新增后应换新数组引用');
+
+    const beforeUpdate = ctx.configStore.loadConfigs();
+    await ctx.configStore.updateConfig(created.id, {
+      name: 'GLM',
+      urlKind: 'openai',
+      baseUrl: 'https://api.example.com/v1',
+      modelId: 'glm-4v-flash',
+      capabilities: ['vision'],
+    });
+    const afterUpdate = ctx.configStore.loadConfigs();
+    assert.notEqual(afterUpdate, beforeUpdate, '更新后必须换新数组引用（缺陷回归）');
+    assert.equal(afterUpdate[0].modelId, 'glm-4v-flash', '内容同步更新');
+    assert.equal(afterUpdate.length, 1);
+
+    await ctx.configStore.updateTestResult(created.id, { testStatus: 'passed', testMessage: 'ok' });
+    assert.notEqual(ctx.configStore.loadConfigs(), afterUpdate, '测试结果回写同样换新引用');
+
+    await ctx.configStore.deleteConfig(created.id);
+    assert.notEqual(ctx.configStore.loadConfigs(), afterUpdate, '删除后应换新数组引用');
+    assert.equal(ctx.configStore.loadConfigs().length, 0);
+  } finally {
+    ctx.close();
+  }
+});
+
 test('数据库不可用：ensureConfigCache 失败返回 false，镜像保持未加载', async () => {
   const { adapter, close } = createMemoryAdapter();
   const fileSystem = createFsStub();
@@ -394,6 +437,70 @@ test('密钥换绑（§8.8）：新 keyRef 先行，DB 成功后清旧凭证；D
     assert.equal(await ctx.secureStore.getItemAsync(after.keyRef), 'sk-new', '旧凭证仍可用');
     const leaked = [...ctx.secureStore.store.entries()].find(([k, v]) => k !== after.keyRef && v === 'sk-fail');
     assert.equal(leaked, undefined, 'DB 失败时新凭证已被删除');
+  } finally {
+    ctx.close();
+  }
+});
+
+test('测试状态保留与重置：测后保存保留结果、只改名不丢失、改连接参数未重测重置为未测试', async () => {
+  const ctx = await setup({ jsonConfigs: [] });
+  try {
+    await ctx.configStore.ensureConfigCache();
+
+    // 1. 新增配置：测试通过后直接保存，列表应为 passed 而非 untested
+    const created = await ctx.configStore.addConfig({
+      name: '豆包图像',
+      urlKind: 'openai_images',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      modelId: 'doubao-seedream-5-0-flash-260915',
+      capabilities: ['image_gen'],
+      apiKey: 'sk-img-1',
+      testResult: { testStatus: 'passed', testMessage: '连接通过', testedAt: '2026-11-25T10:00:00.000Z' },
+    });
+    assert.equal(created.testStatus, 'passed');
+    assert.equal(created.testMessage, '连接通过');
+    assert.equal(created.testedAt, '2026-11-25T10:00:00.000Z');
+    const rowAfterAdd = ctx.db
+      .prepare('SELECT test_status, test_message, tested_at FROM ai_configs WHERE id = ?')
+      .get(created.id);
+    assert.equal(rowAfterAdd.test_status, 'passed');
+    assert.equal(rowAfterAdd.test_message, '连接通过');
+
+    // 2. 编辑配置：只改名称不改调用参数且未传 testResult，应保留已有 passed 状态
+    const renamed = await ctx.configStore.updateConfig(created.id, {
+      name: '豆包 Seedream',
+      urlKind: 'openai_images',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      modelId: 'doubao-seedream-5-0-flash-260915',
+      capabilities: ['image_gen'],
+    });
+    assert.equal(renamed.testStatus, 'passed', '只改展示名称不应清除已有测试通过状态');
+    assert.equal(renamed.callRevision, created.callRevision);
+
+    // 3. 编辑配置：改了 modelId 但未重新测试，应重置为 untested
+    const changedWithoutTest = await ctx.configStore.updateConfig(created.id, {
+      name: '豆包 Seedream',
+      urlKind: 'openai_images',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      modelId: 'doubao-seedream-5-0-pro',
+      capabilities: ['image_gen'],
+    });
+    assert.equal(changedWithoutTest.testStatus, 'untested', '改调用参数且未测试应重置为未测试');
+    assert.equal(changedWithoutTest.testMessage, undefined);
+    assert.notEqual(changedWithoutTest.callRevision, created.callRevision);
+
+    // 4. 编辑配置：改了参数并针对新参数测试通过后保存，应直接保留 passed
+    const changedWithTest = await ctx.configStore.updateConfig(created.id, {
+      name: '豆包 Seedream',
+      urlKind: 'openai_images',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      modelId: 'doubao-seedream-5-0-flash-260915',
+      capabilities: ['image_gen'],
+      testResult: { testStatus: 'passed', testMessage: '新参数测试通过' },
+    });
+    assert.equal(changedWithTest.testStatus, 'passed', '带新测试结果保存应保留 passed');
+    assert.equal(changedWithTest.testMessage, '新参数测试通过');
+    assert.ok(changedWithTest.testedAt);
   } finally {
     ctx.close();
   }

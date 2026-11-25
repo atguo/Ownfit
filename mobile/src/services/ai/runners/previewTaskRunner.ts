@@ -61,8 +61,8 @@ export interface PreviewRunnerDeps {
   ): Promise<boolean>;
   getConfig(id: string): ModelConfig | undefined;
   getApiKey(keyRef: string): Promise<string | null>;
-  /** 读取人物参考（含版本）；缺失时任务标 failed(reference_missing) */
-  readReferenceDataUrl(): Promise<{ dataUrl: string; updatedAt: string } | null>;
+  /** 读取人物参考（含版本与可选的同人补充参考照）；缺失时任务标 failed(reference_missing) */
+  readReferenceDataUrl(): Promise<{ dataUrl: string; extraDataUrls?: string[]; updatedAt: string } | null>;
   /** 槽位单品描述（名称/品类），组装提示词；itemWear 为逐件有效穿法（C4/F3，按件覆盖） */
   describeItems(itemIds: string[], itemWear?: Record<string, string>): Promise<PreviewSlotItem[]>;
   /** C2/R5 发送前复核：单品仍可用且资料版本与入队快照一致、人物参考版本一致。
@@ -77,7 +77,9 @@ export interface PreviewRunnerDeps {
     apiKey: string;
     prompt: string;
     personDataUrl: string;
-    /** 衣物实拍参考图（H3-Image 真图路径；顺序与 prompt 清单一致，旧模型忽略） */
+    /** 同一个人的补充参考照（如面部近景/侧面照，多图模型使用） */
+    extraPersonDataUrls?: string[];
+    /** 衣物实拍参考图（H3-Image / OpenAI 图像兼容真图路径；顺序与 prompt 清单一致，旧模型忽略） */
     garmentImages: string[];
     signal: AbortSignal;
   }): Promise<{ ok: true; imageUrl: string } | { ok: false; kind: string; message: string }>;
@@ -188,18 +190,58 @@ function referenceNoteFor(kind?: string | null): string {
  * 绝不静默截掉末尾衣物（截断会让后面的单品"整件消失"）。 */
 export const PREVIEW_PROMPT_BUDGET = 6000;
 
+/** 当前图像配置是否支持“人物 + 多件衣物实拍图”真图参考路径 */
+function supportsGarmentImageRefs(config: Pick<ModelConfig, 'urlKind' | 'modelId'>): boolean {
+  if (config.urlKind === 'openai_images') return true;
+  if (config.urlKind === 'minimax') return /h3[-_]?image/i.test(config.modelId ?? '');
+  return false;
+}
+
 /** C7（2026-11-04）：按重要性组织提示词——先全部单品身份（品类/主色/关键特征/逐件穿法），
- * 再次要描述；支持注入纠偏约束（C8 有界纠偏）与参考视角说明（C3）。返回是否压缩与是否仍超预算。 */
+ * 再次要描述；支持注入纠偏约束（C8 有界纠偏）、参考视角说明（C3）以及多图参考的逐件图号显式绑定。
+ * 返回是否压缩与是否仍超预算。 */
 export function buildPrompt(
   items: PreviewSlotItem[],
   wearStyle: string,
   corrections: string[] = [],
   referenceNote = '',
+  withGarmentImageRefs = false,
+  personImageCount = 1,
 ): { text: string; compressed: boolean; overBudget: boolean } {
+  const safePersonCount = Math.max(1, personImageCount);
+  // 多图参考路径：按实际有图的单品顺序分配图号（图1~图P=本人参考照，图P+1起=有效衣物实拍图），
+  // 缺图单品不占位并显式注明，避免 filter 后顺序错位导致张冠李戴。
+  const imageIndexByItem = new Map<string, number>();
+  if (withGarmentImageRefs) {
+    let nextIndex = safePersonCount + 1;
+    for (const item of items) {
+      if (item.photoDataUrl) {
+        imageIndexByItem.set(item.itemId, nextIndex);
+        nextIndex += 1;
+      }
+    }
+  }
+  const hasAnyGarmentRef = imageIndexByItem.size > 0;
+  const personRefLabel = safePersonCount > 1 ? `图1至图${safePersonCount}` : '图1';
+
   const itemLine = (item: PreviewSlotItem, withSecondary: boolean): string => {
-    const parts = [item.category];
+    const parts: string[] = [];
+    const refIdx = hasAnyGarmentRef ? imageIndexByItem.get(item.itemId) : undefined;
+    const hasOwnPhotoRef = typeof refIdx === 'number';
+    if (hasAnyGarmentRef) {
+      parts.push(hasOwnPhotoRef ? `[参考图${refIdx}]` : '[无实拍图，仅按文字]');
+    }
+    parts.push(item.category);
     if (item.name) parts.push(`名称=${item.name}`);
     if (item.mainColor) parts.push(`主色=${item.mainColor.name}(${item.mainColor.hex})`);
+    if (hasOwnPhotoRef) {
+      // 真图参考模式分层精简：已有实拍参考图的单品不再堆砌冗长文字特征与次要细节，
+      // 避免文字提取误差与实拍图像素冲突或稀释模型对参考图的注意力；仅保留主色防色偏与穿法约束。
+      const itemWear = item.wearStyle && item.wearStyle !== '自然垂放' ? `穿法=${item.wearStyle}` : '';
+      if (itemWear) parts.push(itemWear);
+      return parts.join('；');
+    }
+    // 纯文字模式或本件缺实拍图：保留完整文字特征（身份层优先，次要层按预算可压缩）
     if (item.accentColorNames?.length) parts.push(`配色=${item.accentColorNames.join('/')}`);
     if (item.keyFeatures.length) parts.push(item.keyFeatures.join('，'));
     const itemWear = item.wearStyle && item.wearStyle !== '自然垂放' ? `穿法=${item.wearStyle}` : '';
@@ -208,17 +250,25 @@ export function buildPrompt(
     return parts.join('；');
   };
 
-  const header = '让图中人物穿上以下衣物，保持人物的脸部、发型、肤色与姿态不变，只替换衣着：';
+  const header = hasAnyGarmentRef
+    ? `参考图说明：${personRefLabel}为同一本人的唯一外观依据；标注[参考图N]的为对应衣物唯一外观依据。请将以下衣物穿到${personRefLabel}人物身上，严格保持本人脸部、发型、肤色、体型与姿态不变，忠实还原各参考图衣物的款式、颜色、图案、领型与材质，不要自行改款：`
+    : '让图中人物穿上以下衣物，保持人物的脸部、发型、肤色与姿态不变，只替换衣着：';
   const wearText =
     wearStyle && wearStyle !== '自然垂放' ? `主穿法：${wearStyle}（逐件穿法按清单）。` : '';
   const correctionText = corrections.length
     ? `重点约束（上一次生成在以下方面偏离，本次必须修正）：\n${corrections.map((c, i) => `${i + 1}. ${c}`).join('\n')}`
     : '';
-  const footers = [
-    '保持人物的脸部、发型、肤色、体型和姿势完全不变，服装的颜色、图案、领口、袖型和长度严格符合上述描述。',
-    '人物完整全身入镜：从头到脚完整呈现，不裁切腿部与鞋履。',
-    '自然站姿，简洁室内背景，真实感照片风格，不添加衣物清单以外的显著服饰。',
-  ];
+  const footers = hasAnyGarmentRef
+    ? [
+        '以参考图1和各衣物参考图为准，禁止改变人物五官与体型，禁止更改衣物款式、图案或增减未列出的服饰。',
+        '人物完整全身入镜：从头到脚完整呈现，不裁切腿部与鞋履。',
+        '自然站姿，简洁室内背景，真实感照片风格。',
+      ]
+    : [
+        '保持人物的脸部、发型、肤色、体型和姿势完全不变，服装的颜色、图案、领口、袖型和长度严格符合上述描述。',
+        '人物完整全身入镜：从头到脚完整呈现，不裁切腿部与鞋履。',
+        '自然站姿，简洁室内背景，真实感照片风格，不添加衣物清单以外的显著服饰。',
+      ];
 
   const assemble = (withSecondary: boolean): string =>
     [
@@ -318,9 +368,18 @@ export function createPreviewTaskRunner(deps: PreviewRunnerDeps): PreviewRunner 
 
     // F3/C4：逐件有效穿法来自入队快照（入队前已按槽位语义归一）
     const items = await deps.describeItems(task.itemIds, stored?.itemWear);
-    // C7：按预算组织提示词（身份层优先）；仍超预算时显式失败，不静默截断。
+    // C7：按预算组织提示词（身份层优先）；支持多图参考的模型自动附加精确图号绑定；仍超预算时显式失败，不静默截断。
     const referenceNote = referenceNoteFor(stored?.referenceKind);
-    const built = buildPrompt(items, task.wearStyle, [], referenceNote);
+    const multiRef = supportsGarmentImageRefs(config);
+    const extraPersonDataUrls = multiRef ? (reference.extraDataUrls ?? []).filter(Boolean) : [];
+    const built = buildPrompt(
+      items,
+      task.wearStyle,
+      [],
+      referenceNote,
+      multiRef,
+      1 + extraPersonDataUrls.length,
+    );
     if (built.overBudget) {
       await deps.updateStatus(task.id, ['running'], 'failed', {
         finishedAt: new Date().toISOString(),
@@ -342,6 +401,7 @@ export function createPreviewTaskRunner(deps: PreviewRunnerDeps): PreviewRunner 
         apiKey,
         prompt,
         personDataUrl: reference.dataUrl,
+        extraPersonDataUrls,
         garmentImages: items.map((item) => item.photoDataUrl).filter(Boolean) as string[],
         signal: controller.signal,
       });
@@ -595,13 +655,23 @@ export function createPreviewTaskRunner(deps: PreviewRunnerDeps): PreviewRunner 
       keyFeatures: item.keyFeatures,
     })));
     if (corrections.length === 0) return false;
-    const retryPrompt = buildPrompt(input.slotItems, input.task.wearStyle, corrections, input.referenceNote);
+    const multiRef = supportsGarmentImageRefs(config);
+    const extraPersonDataUrls = multiRef ? (reference.extraDataUrls ?? []).filter(Boolean) : [];
+    const retryPrompt = buildPrompt(
+      input.slotItems,
+      input.task.wearStyle,
+      corrections,
+      input.referenceNote,
+      multiRef,
+      1 + extraPersonDataUrls.length,
+    );
     if (retryPrompt.overBudget) return false;
     const retry = await deps.generate({
       config: { urlKind: config.urlKind, baseUrl: config.baseUrl, modelId: config.modelId },
       apiKey,
       prompt: retryPrompt.text,
       personDataUrl: reference.dataUrl,
+      extraPersonDataUrls,
       garmentImages: input.slotItems.map((item) => item.photoDataUrl).filter(Boolean) as string[],
       signal: new AbortController().signal,
     });

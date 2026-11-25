@@ -208,8 +208,13 @@ export async function scanConsistency(): Promise<ConsistencyReport> {
   );
   if (refRow?.value) {
     try {
-      const parsed = JSON.parse(refRow.value) as { path?: string };
+      const parsed = JSON.parse(refRow.value) as { path?: string; extraPaths?: string[] };
       if (parsed?.path) referenced.add(parsed.path);
+      if (Array.isArray(parsed?.extraPaths)) {
+        for (const extra of parsed.extraPaths) {
+          if (typeof extra === 'string' && extra) referenced.add(extra);
+        }
+      }
     } catch {
       // 记录损坏按无引用处理（文件成为孤儿候选，但仍有年龄保护）
     }

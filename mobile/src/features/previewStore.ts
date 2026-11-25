@@ -13,7 +13,7 @@ import { buildGarmentFeatureView } from '../services/ai/garmentView';
 import { WEAR_STYLE_VALUES } from '../services/ai/recommendationService';
 import { checkerSystemPrompt, checkerUserPrompt } from '../services/ai/previewChecker';
 import { chatCompletion } from '../services/ai/clients/openaiClient';
-import { generateImage, isH3ImageModel } from '../services/ai/clients/minimaxClient';
+import { generateImageByConfig } from '../services/ai/clients/imageClient';
 import { getItem } from '../data/repositories/itemRepository';
 import { getAnalysisView } from '../data/repositories/attributeRepository';
 import { getMainPhotoPaths, readAnalysisImage } from '../data/repositories/photoRepository';
@@ -79,7 +79,18 @@ export function initPreviewRunner(): PreviewRunner {
         const file = new File(Paths.document, reference.path);
         if (!file.exists) return null;
         const base64 = await file.base64();
-        return { dataUrl: `data:image/jpeg;base64,${base64}`, updatedAt: reference.updatedAt };
+        const extraDataUrls: string[] = [];
+        for (const extraPath of reference.extraPaths ?? []) {
+          const extraFile = new File(Paths.document, extraPath);
+          if (extraFile.exists) {
+            extraDataUrls.push(`data:image/jpeg;base64,${await extraFile.base64()}`);
+          }
+        }
+        return {
+          dataUrl: `data:image/jpeg;base64,${base64}`,
+          ...(extraDataUrls.length ? { extraDataUrls } : null),
+          updatedAt: reference.updatedAt,
+        };
       },
       describeItems: async (itemIds, itemWear) => {
         const out: PreviewSlotItem[] = [];
@@ -122,16 +133,19 @@ export function initPreviewRunner(): PreviewRunner {
           setTimeout(() => resolve({ ok: false, kind: 'timeout', message: '生成超时（150 秒硬超时）' }), HARD_TIMEOUT_MS);
         });
         const call = (async (): Promise<GenerationOutcome> => {
-          // H3-Image 真图路径（2026-11-13）：参考图编号说明并入 prompt——图 1 人物、图 2 起衣物
-          // （顺序与 runner 传入的 garmentImages 一致）；旧 image-01 忽略 garmentImages 仍走文字路径。
-          const h3 = isH3ImageModel(input.config.modelId);
-          const prompt = h3 && input.garmentImages.length
-            ? `参考图说明：图1为本人参考照；图2起为本次要穿上的衣物实拍（顺序与下方清单一致），生成时严格保持人物身份与各衣物的外观、颜色、图案、材质特征。\n${input.prompt}`
-            : input.prompt;
-          const result = await generateImage(
+          // 统一按配置协议分发（OpenAI 图像兼容 / MiniMax H3 走多图参考，旧 image-01 回退纯文字路径）；
+          // 多图参考的精确图号绑定（图1人物 + [参考图N]衣物）已在 previewTaskRunner.buildPrompt 中装配。
+          const result = await generateImageByConfig(
             input.config,
             input.apiKey,
-            { prompt, personImage: input.personDataUrl, garmentImages: input.garmentImages, aspectRatio: '2:3', n: 1 },
+            {
+              prompt: input.prompt,
+              personImage: input.personDataUrl,
+              extraPersonImages: input.extraPersonDataUrls,
+              garmentImages: input.garmentImages,
+              aspectRatio: '2:3',
+              n: 1,
+            },
           );
           if (result.ok && result.imageUrls.length > 0) {
             return { ok: true as const, imageUrl: result.imageUrls[0] };

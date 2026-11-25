@@ -19,6 +19,7 @@ import { testConnection } from '../../services/ai/clients/testConnection';
 import {
   capabilityLabels,
   insecureUrlProblem,
+  isImageGenUrlKind,
   urlKindLabels,
   type AiCapability,
   type ModelConfig,
@@ -29,13 +30,31 @@ import { colors, radius } from '../../ui/tokens';
 const capabilityOptions: AiCapability[] = ['text', 'vision'];
 const defaultsByKind: Record<UrlKind, AiCapability[]> = {
   openai: ['text', 'vision'],
+  openai_images: ['image_gen'],
   minimax: ['image_gen'],
 };
 
 type TestState =
   | { phase: 'idle' }
   | { phase: 'running' }
-  | { phase: 'done'; ok: boolean; message: string };
+  | { phase: 'done'; ok: boolean; message: string; fingerprint: string; testedAt: string };
+
+/** 影响实际调用的连接参数指纹：用于判定刚完成的测试结果是否仍对应当前表单输入 */
+function connectionFingerprint(params: {
+  urlKind: UrlKind;
+  baseUrl: string;
+  modelId: string;
+  capabilities: AiCapability[];
+  apiKey: string;
+}): string {
+  return JSON.stringify([
+    params.urlKind,
+    params.baseUrl.trim(),
+    params.modelId.trim(),
+    [...params.capabilities].sort(),
+    params.apiKey.trim(),
+  ]);
+}
 
 // 配置表单：新增（无 id）与编辑（有 id）共用。
 export default function AiConfigEditScreen() {
@@ -71,6 +90,17 @@ export default function AiConfigEditScreen() {
   }, []);
 
   const isMinimax = urlKind === 'minimax';
+  const isOpenAIImages = urlKind === 'openai_images';
+  const isImageGenKind = isImageGenUrlKind(urlKind);
+  const currentFingerprint = connectionFingerprint({
+    urlKind,
+    baseUrl,
+    modelId,
+    capabilities,
+    apiKey,
+  });
+  const matchingTest =
+    test.phase === 'done' && test.fingerprint === currentFingerprint ? test : null;
 
   function changeUrlKind(kind: UrlKind) {
     setUrlKind(kind);
@@ -129,13 +159,24 @@ export default function AiConfigEditScreen() {
         modelId: modelId.trim(),
         capabilities,
         apiKey: apiKey.trim() || undefined,
+        ...(matchingTest
+          ? {
+              testResult: {
+                testStatus: matchingTest.ok ? ('passed' as const) : ('failed' as const),
+                testMessage: matchingTest.message,
+                testedAt: matchingTest.testedAt,
+              },
+            }
+          : null),
       };
-      if (existing) {
-        await updateConfig(existing.id, input);
-      } else {
-        await addConfig(input);
-      }
-      toast('已保存（尚未测试连接）');
+      const saved = existing ? await updateConfig(existing.id, input) : await addConfig(input);
+      const statusText =
+        saved?.testStatus === 'passed'
+          ? '已保存（连接测试通过）'
+          : saved?.testStatus === 'failed'
+            ? '已保存（最近测试失败）'
+            : '已保存（尚未测试连接）';
+      toast(statusText);
       router.back();
     } finally {
       setSaving(false);
@@ -148,16 +189,34 @@ export default function AiConfigEditScreen() {
       toast(problem);
       return;
     }
+    const testedFingerprint = currentFingerprint;
+    const matchesSavedConfig =
+      !!existing &&
+      testedFingerprint ===
+        connectionFingerprint({
+          urlKind: existing.urlKind,
+          baseUrl: existing.baseUrl,
+          modelId: existing.modelId,
+          capabilities: existing.capabilities,
+          apiKey: '',
+        });
     setTest({ phase: 'running' });
     const result = await testConnection(buildDraft(), apiKey.trim() || undefined);
-    // 已保存的配置把测试结果写回存储（列表页的状态徽标展示用）；未保存的草稿仅展示
-    if (existing) {
+    const testedAt = new Date().toISOString();
+    // 仅当测试的是已保存配置的原参数时直接写回存储；新增草稿或已修改参数在点击“保存”时一并落库
+    if (existing && matchesSavedConfig) {
       await updateTestResult(existing.id, {
         testStatus: result.ok ? 'passed' : 'failed',
         testMessage: result.message,
       });
     }
-    setTest({ phase: 'done', ok: result.ok, message: result.message });
+    setTest({
+      phase: 'done',
+      ok: result.ok,
+      message: result.message,
+      fingerprint: testedFingerprint,
+      testedAt,
+    });
   }
 
   async function remove() {
@@ -202,13 +261,21 @@ export default function AiConfigEditScreen() {
         label={
           isMinimax
             ? '服务地址（完整 API 地址，直接调用不拼接）'
-            : '服务地址（填到版本号为止，自动拼接 /chat/completions）'
+            : isOpenAIImages
+              ? '服务地址（填到版本号为止，自动拼接 /images/generations；也可直接填完整路径）'
+              : '服务地址（填到版本号为止，自动拼接 /chat/completions）'
         }
       >
         <TextField
           value={baseUrl}
           onChangeText={setBaseUrl}
-          placeholder={isMinimax ? 'https://api.minimax.cn/v1/images/edits' : 'https://api.example.com/v1'}
+          placeholder={
+            isMinimax
+              ? 'https://api.minimax.cn/v1/images/edits'
+              : isOpenAIImages
+                ? 'https://ark.cn-beijing.volces.com/api/v3'
+                : 'https://api.example.com/v1'
+          }
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="url"
@@ -219,14 +286,20 @@ export default function AiConfigEditScreen() {
         <TextField
           value={modelId}
           onChangeText={setModelId}
-          placeholder={isMinimax ? 'MiniMax-H3-Image' : 'glm-4v-flash'}
+          placeholder={
+            isMinimax
+              ? 'MiniMax-H3-Image'
+              : isOpenAIImages
+                ? 'doubao-seedream-5-0-flash-260915'
+                : 'glm-4v-flash'
+          }
           autoCapitalize="none"
           autoCorrect={false}
         />
       </Field>
 
       <Field label="能力（决定后续任务使用哪条配置）">
-        {isMinimax ? (
+        {isImageGenKind ? (
           <View style={styles.chipRow}>
             <Button variant="chip" label={capabilityLabels.image_gen} active disabled />
           </View>
@@ -259,13 +332,19 @@ export default function AiConfigEditScreen() {
       <Notice>
         {isMinimax
           ? 'MiniMax 图像协议的“测试连接”会实际生成一张测试图，产生少量费用。'
-          : '“测试连接”发送一次极小的文本请求。'}
+          : isOpenAIImages
+            ? 'OpenAI 图像兼容协议支持火山方舟 Seedream 等多图参考接口；“测试连接”会实际生成一张测试图，产生少量费用。'
+            : '“测试连接”发送一次极小的文本请求。'}
         {'\n'}Key 只保存在设备安全存储，不进入日志与备份。
       </Notice>
 
       {test.phase === 'done' ? (
         <View style={[styles.testResult, test.ok ? styles.testOk : styles.testFail]}>
-          <Text style={styles.testResultText}>{test.ok ? '✓ ' : '✗ '}{test.message}</Text>
+          <Text style={styles.testResultText}>
+            {test.ok ? '✓ ' : '✗ '}
+            {test.message}
+            {!matchingTest ? '\n配置参数已修改，当前结果不适用于修改后的配置，保存后将标记为未测试。' : ''}
+          </Text>
         </View>
       ) : null}
 

@@ -29,6 +29,7 @@ import type { PreviewCheckRecord, PreviewCheckOverall } from '../../data/reposit
 import type { PreviewPostProcessRecord } from '../../data/repositories/previewPostprocessRepository';
 import type { ConfigResolution } from '../../services/ai/visionConfig';
 import { checkGarmentEvidence } from '../../services/ai/evidenceCheck';
+import { PERSON_VERDICT_ID } from '../../services/ai/previewChecker';
 import { callRevisionOf } from '../../services/ai/types';
 import { colors, type } from '../../ui/tokens';
 
@@ -101,7 +102,13 @@ function checkLine(check: PreviewCheckRecord | null): { label: string; tone: 'mu
 function describeDeviations(check: PreviewCheckRecord): string {
   const deviated = check.verdicts.filter((v) => v.status === 'deviate');
   if (deviated.length === 0) return '';
-  return `（${deviated.length} 处：${deviated.map((v) => v.note ?? v.itemId).join('；').slice(0, 80)}）`;
+  return `（${deviated.length} 处：${deviated
+    .map((v) => {
+      const target = v.itemId === PERSON_VERDICT_ID ? '人物一致性' : v.itemId;
+      return v.note ? (v.itemId === PERSON_VERDICT_ID ? `人物：${v.note}` : v.note) : target;
+    })
+    .join('；')
+    .slice(0, 80)}）`;
 }
 
 /** §8.4.8：后处理阶段行——区分"图已生成、核对中/纠偏中""未核对""无法判断""重大偏离" */
@@ -151,6 +158,8 @@ export function PreviewSheet({
   const [compareMode, setCompareMode] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
   const [comparisonView, setComparisonView] = useState<{ a: PreviewTask; b: PreviewTask } | null>(null);
+  // 硬门控：重大偏离默认拦截展示，用户可显式点击展开查看原图用于对照排查
+  const [revealedMajorIds, setRevealedMajorIds] = useState<Record<string, boolean>>({});
 
   const reload = useCallback(async () => {
     const recent = await listRecentPreviewTasks(8);
@@ -266,25 +275,32 @@ export function PreviewSheet({
     ]);
   }
 
-  function onPressGenerate() {
-    if (!resolution) return;
-    if (resolution.status === 'missing') {
+  async function onPressGenerate() {
+    // 首击无响应修复（2026-11-16）：resolution 异步就绪前点按原为静默返回，
+    // 与 RecommendationSheet 同款缺陷；现改为就地补齐解析后继续执行。
+    let res = resolution;
+    if (!res) {
+      toast('正在读取模型配置…');
+      res = await resolveImageGenForPreview();
+      setResolution(res);
+    }
+    if (res.status === 'missing') {
       Alert.alert(
         '还没有图像生成模型',
-        '上身预览使用图像生成服务（如 MiniMax-H3-Image，支持衣物实拍参考；旧 image-01 仅文字特征）。\n到「我的 → 模型配置」添加配置，能力勾选“图像生成”。',
+        '上身预览支持“OpenAI 图像兼容”（如豆包 Seedream 5.0 Flash 等多图参考接口）或“MiniMax 图像”。\n到「我的 → 模型配置」添加配置即可使用。',
         [{ text: '知道了' }],
       );
       return;
     }
-    if (resolution.status === 'invalid') {
-      Alert.alert('模型配置不可用', resolution.message, [{ text: '知道了' }]);
+    if (res.status === 'invalid') {
+      Alert.alert('模型配置不可用', res.message, [{ text: '知道了' }]);
       return;
     }
-    if (resolution.status === 'choose') {
+    if (res.status === 'choose') {
       // 多个候选：保持 choose 状态由下方候选列表选择，不静默切换供应商
       return;
     }
-    start(resolution.config.id);
+    start(res.config.id);
   }
 
   return (
@@ -316,7 +332,7 @@ export function PreviewSheet({
       <Button
         variant="primary"
         label={starting ? '正在提交…' : '生成上身预览'}
-        onPress={onPressGenerate}
+        onPress={() => void onPressGenerate()}
         disabled={starting}
       />
 
@@ -384,9 +400,17 @@ export function PreviewSheet({
 
       {tasks.map((task) => {
         const current = currentInput ? previewInputMatches(task, currentInput) : false;
-        const checkLineResult = checkLine(checks[task.id] ?? null);
-        const postLine = postProcessLine(postProcess[task.id] ?? null);
-        const checkOverall = checks[task.id]?.overall ?? null;
+        const checkRecord = checks[task.id] ?? null;
+        const checkLineResult = checkLine(checkRecord);
+        const postRecord = postProcess[task.id] ?? null;
+        const postLine = postProcessLine(postRecord);
+        const checkOverall = checkRecord?.overall ?? null;
+        const postInFlight =
+          postRecord?.stage === 'queued' || postRecord?.stage === 'checking' || postRecord?.stage === 'correcting';
+        // 硬门控：自动核对最终判定为重大偏离（且非纠偏进行中）时，默认拦截不直接展示跑偏图，
+        // 避免假图误导选衣；用户仍可手动展开查看用于排查问题。
+        const majorGated = checkOverall === 'major' && !postInFlight;
+        const majorRevealed = !!revealedMajorIds[task.id];
         const compareSelectable = task.status === 'succeeded' && !!task.resultPreviewPath && checkOverall !== 'major';
         return (
           <View key={task.id} style={styles.taskCard}>
@@ -404,18 +428,41 @@ export function PreviewSheet({
               />
             ) : null}
             {compareMode && !compareSelectable && task.status === 'succeeded' && task.resultPreviewPath ? (
-              <Text style={[styles.checkText, styles.checkWarn]}>自动核对为重大偏离，不进入同条件比较（可单独查看）</Text>
+              <Text style={[styles.checkText, styles.checkWarn]}>自动核对为重大偏离，不进入同条件比较</Text>
             ) : null}
             {task.status === 'succeeded' && task.resultPreviewPath ? (
               <>
-                <Image
-                  source={{ uri: previewImageUri(task.resultPreviewPath) }}
-                  style={styles.previewImage}
-                  resizeMode="contain"
-                  accessibilityLabel="上身预览示意图"
-                />
+                {majorGated && !majorRevealed ? (
+                  <View style={styles.gateCard}>
+                    <Text style={styles.gateTitle}>未通过一致性核对（已拦截）</Text>
+                    <Text style={styles.gateDesc}>
+                      {`本次生成图与原衣物或本人参考照存在重大偏离${checkRecord ? describeDeviations(checkRecord) : ''}，为避免误导选衣，默认不直接展示。建议检查参考照或重新生成。`}
+                    </Text>
+                    <Button
+                      variant="text"
+                      label="仍要展开查看偏离图（仅用于排查）"
+                      onPress={() => setRevealedMajorIds((prev) => ({ ...prev, [task.id]: true }))}
+                    />
+                  </View>
+                ) : (
+                  <>
+                    <Image
+                      source={{ uri: previewImageUri(task.resultPreviewPath) }}
+                      style={styles.previewImage}
+                      resizeMode="contain"
+                      accessibilityLabel="上身预览示意图"
+                    />
+                    {majorGated ? (
+                      <Button
+                        variant="text"
+                        label="收起偏离图"
+                        onPress={() => setRevealedMajorIds((prev) => ({ ...prev, [task.id]: false }))}
+                      />
+                    ) : null}
+                  </>
+                )}
                 {postLine ? <Text style={styles.checkText}>{postLine}</Text> : null}
-                {checkLineResult ? (
+                {checkLineResult && !(majorGated && !majorRevealed) ? (
                   <Text
                     style={[
                       styles.checkText,
@@ -513,6 +560,23 @@ const styles = StyleSheet.create({
     height: 260,
     borderRadius: 8,
     backgroundColor: colors.artBg,
+  },
+  gateCard: {
+    borderRadius: 10,
+    backgroundColor: '#f6e8e3',
+    padding: 12,
+    marginTop: 4,
+  },
+  gateTitle: {
+    ...type.sectionHead,
+    color: '#9e3f27',
+    marginBottom: 4,
+  },
+  gateDesc: {
+    ...type.footnote,
+    color: colors.ink,
+    lineHeight: 18,
+    marginBottom: 6,
   },
   checkText: {
     ...type.footnote,

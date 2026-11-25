@@ -105,8 +105,8 @@ export interface AnalysisView {
     completedAt: string;
     modelName: string;
   } | null;
-  /** 用户确认的品类（内置；来自 items.category） */
-  category: { value: string | null; source: 'user_confirmed' };
+  /** 品类（来自 items.category 或最新有效分析建议；source 区分 user_confirmed / ai_inferred） */
+  category: { value: string | null; source: AttrSource };
   /** AI 名称建议（采纳后写入 items.name） */
   suggestedName: { value: string | null; source: 'ai_inferred' } | null;
   colors: { value: GarmentColor[]; source: AttrSource };

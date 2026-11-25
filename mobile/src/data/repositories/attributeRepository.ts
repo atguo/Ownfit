@@ -8,7 +8,9 @@
 // - 用户确认值不被 AI 覆盖：AI 行只取"当前照片最新成功任务"，且仅承认 2.0 契约版本
 // - 提交保护：任务不存在/非 running → discarded；衣物删除/归档 → cancelled；
 //   revision 或主图不一致 → stale；通过 → succeeded + 写动态属性行（仅 single）
-// - AI 品类建议不能直接改变 items.category
+// - 首次入库草稿自动入库（2026-11-25 项目用户确认）：status='draft' 且用户未填名称/品类、
+//   且分析为 single 并识别出品类时，同事务自动置 active 并写入 AI 推断品类与建议名称
+//   （category 属性行诚实标 ai_inferred/unconfirmed）；已入库或已填数据的衣物绝不覆盖。
 
 import {
   GARMENT_ANALYSIS_VERSION,
@@ -190,10 +192,14 @@ export async function getAnalysisView(itemId: string): Promise<AnalysisView> {
   let userColors: GarmentColor[] | null = null;
   let userColorsSource: AttrSource = 'user_entered';
   let measurements: { list: Measurement[]; source: AttrSource } | null = null;
+  let latestCategorySource: AttrSource | null = null;
 
   for (const row of rows) {
     const source = row.source_type as AttrSource;
     if (BUILTIN_FIELDS.has(row.field)) {
+      if (row.field === 'category' && latestCategorySource === null) {
+        latestCategorySource = source;
+      }
       if (row.field === 'colors' && row.source_type !== 'ai_inferred' && userColors === null) {
         try {
           const parsed = JSON.parse(row.value ?? '[]') as GarmentColor[];
@@ -254,10 +260,15 @@ export async function getAnalysisView(itemId: string): Promise<AnalysisView> {
       ? { value: lastValid.result.colors, source: 'ai_inferred' as AttrSource }
       : { value: [] as GarmentColor[], source: 'ai_inferred' as AttrSource };
 
+  const categoryValue = item?.category ?? lastValid?.result.category ?? null;
+  const categorySource: AttrSource = item?.category
+    ? (latestCategorySource ?? 'user_confirmed')
+    : 'ai_inferred';
+
   return {
     latestTask,
     lastValidResult: lastValid,
-    category: { value: item?.category ?? null, source: 'user_confirmed' },
+    category: { value: categoryValue, source: categorySource },
     suggestedName: lastValid
       ? { value: lastValid.result.suggestedName, source: 'ai_inferred' }
       : null,
@@ -329,6 +340,35 @@ export async function commitGarmentAnalysis(
           attribute.name,
           attribute.value,
           task.photoId,
+          now,
+          task.inputRevision,
+          taskId,
+        );
+      }
+
+      // 首次入库草稿在用户未填写任何数据时（status=draft 且 category/name 均空），
+      // 识别出有效单品品类后自动入库；category 属性行诚实标 ai_inferred/unconfirmed（不伪造人工确认）。
+      if (
+        item.status === 'draft' &&
+        item.category === null &&
+        item.name === null &&
+        result.category !== null
+      ) {
+        const autoName = result.suggestedName?.trim() || null;
+        await db.runAsync(
+          'UPDATE items SET status = ?, category = ?, name = ?, updated_at = ? WHERE id = ?',
+          'active',
+          result.category,
+          autoName,
+          now,
+          task.itemId,
+        );
+        await db.runAsync(
+          `INSERT INTO attributes (id, item_id, field, value, unit, source_type, source_ref, confirm_status, recorded_at, item_version, value_state, value_format, analysis_task_id)
+           VALUES (?, ?, 'category', ?, NULL, 'ai_inferred', '首次入库自动分析', 'unconfirmed', ?, ?, 'known', 'text', ?)`,
+          newId('attr'),
+          task.itemId,
+          result.category,
           now,
           task.inputRevision,
           taskId,

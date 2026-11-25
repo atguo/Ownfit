@@ -221,6 +221,12 @@ export function getConfig(id: string): ModelConfig | undefined {
   return cache?.find((c) => c.id === id);
 }
 
+export interface ConfigTestResultInput {
+  testStatus: ModelConfig['testStatus'];
+  testMessage?: string;
+  testedAt?: string;
+}
+
 export interface ConfigInput {
   name: string;
   urlKind: ModelConfig['urlKind'];
@@ -229,6 +235,8 @@ export interface ConfigInput {
   capabilities: ModelConfig['capabilities'];
   /** 新输入的 Key；为空表示沿用已保存的 Key（编辑场景） */
   apiKey?: string;
+  /** 可选：针对当前提交参数刚完成的连接测试结果（保存时一并落库） */
+  testResult?: ConfigTestResultInput;
 }
 
 function newId(): string {
@@ -254,9 +262,13 @@ async function persistConfig(config: ModelConfig): Promise<void> {
   await db.runAsync(UPSERT_SQL, ...configToRow(config));
   if (cache === null) await ensureConfigCache();
   else {
+    // 增改删都产生新数组引用（不原地改写）：页面快照经 focus 重读时靠引用变化触发渲染，
+    // 原地替换元素会让 setConfigs 判同跳过渲染（2026-11-13 真机缺陷：编辑后列表显示旧 modelId）
     const index = cache.findIndex((c) => c.id === config.id);
-    if (index >= 0) cache[index] = config;
-    else cache = [...cache, config];
+    cache =
+      index >= 0
+        ? cache.map((c, i) => (i === index ? config : c))
+        : [...cache, config];
   }
 }
 
@@ -266,6 +278,7 @@ export async function addConfig(input: ConfigInput): Promise<ModelConfig> {
   const keyRef = `ai-key-${id}`;
   if (input.apiKey) await storeKey(keyRef, input.apiKey);
   const now = new Date().toISOString();
+  const hasTestResult = input.testResult && input.testResult.testStatus !== 'untested';
   const config: ModelConfig = {
     id,
     name: input.name,
@@ -275,7 +288,13 @@ export async function addConfig(input: ConfigInput): Promise<ModelConfig> {
     capabilities: input.capabilities,
     keyRef,
     hasKey: !!input.apiKey,
-    testStatus: 'untested',
+    testStatus: hasTestResult ? input.testResult!.testStatus : 'untested',
+    ...(hasTestResult
+      ? {
+          testMessage: input.testResult!.testMessage,
+          testedAt: input.testResult!.testedAt ?? now,
+        }
+      : null),
     callRevision: newCallRevision(),
     createdAt: now,
     updatedAt: now,
@@ -285,7 +304,7 @@ export async function addConfig(input: ConfigInput): Promise<ModelConfig> {
 }
 
 /**
- * 更新配置：Key 为空时沿用原 Key；URL 类型/地址等变更后测试状态重置为未测试。
+ * 更新配置：Key 为空时沿用原 Key；URL 类型/地址等变更且未附带新测试结果时，测试状态重置为未测试。
  * callRevision 仅在影响调用结果的字段变化时更新（名称、测试结果不算，见 D2）。
  * §8.8 密钥一致性（2026-11-04）：换 Key 不原位覆盖旧凭证——先写新的 keyRef，
  * DB 成功提交新引用与 callRevision 后再清旧凭证；DB 失败删除新凭证（旧配置仍可用）。
@@ -307,6 +326,24 @@ export async function updateConfig(id: string, input: ConfigInput): Promise<Mode
     previous.modelId !== input.modelId ||
     JSON.stringify(previous.capabilities) !== JSON.stringify(input.capabilities) ||
     !!input.apiKey;
+  const now = new Date().toISOString();
+  const nextTestFields = input.testResult
+    ? {
+        testStatus: input.testResult.testStatus,
+        testMessage: input.testResult.testStatus === 'untested' ? undefined : input.testResult.testMessage,
+        testedAt: input.testResult.testStatus === 'untested' ? undefined : input.testResult.testedAt ?? now,
+      }
+    : callChanged
+      ? {
+          testStatus: 'untested' as const,
+          testMessage: undefined,
+          testedAt: undefined,
+        }
+      : {
+          testStatus: previous.testStatus,
+          testMessage: previous.testMessage,
+          testedAt: previous.testedAt,
+        };
   const config: ModelConfig = {
     ...previous,
     keyRef, // §8.8：换 Key 时为新 keyRef（DB 成功提交后才清旧凭证）
@@ -316,11 +353,9 @@ export async function updateConfig(id: string, input: ConfigInput): Promise<Mode
     modelId: input.modelId,
     capabilities: input.capabilities,
     hasKey: input.apiKey ? true : previous.hasKey,
-    testStatus: 'untested',
-    testMessage: undefined,
-    testedAt: undefined,
+    ...nextTestFields,
     callRevision: callChanged ? newCallRevision() : previous.callRevision ?? LEGACY_CALL_REVISION,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   };
   try {
     await persistConfig(config);

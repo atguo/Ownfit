@@ -18,14 +18,31 @@ const REFERENCE_ID = 'preview-reference';
 /** 旧版固定文件名（自愈识别用；新保存一律唯一文件名） */
 const REFERENCE_LEGACY_PATH = 'preview-ref/reference.jpg';
 const REFERENCE_MAX_DIMENSION = 1024;
+/** 同一个人最多保存的参考照张数（1 张主参考 + 最多 3 张补充角度/近景照） */
+export const MAX_PERSON_REFERENCE_PHOTOS = 4;
 
 export interface PreviewReference {
-  /** 相对路径（相对应用 document 目录） */
+  /** 主参考照相对路径（相对应用 document 目录） */
   path: string;
+  /** 补充人物参考照相对路径（同一个人不同角度/面部特写等，最多 3 张；旧记录缺省为空） */
+  extraPaths?: string[];
   /** 参考版本时间（进入预览任务输入版本） */
   updatedAt: string;
   /** C3 参考视角（用户声明）：面部特写 / 全身照。缺失为旧记录（未声明）。 */
   kind?: 'face' | 'full_body';
+}
+
+/** 规范化人物参考的所有有效路径（主图在前，去重） */
+export function allReferencePaths(reference: Pick<PreviewReference, 'path' | 'extraPaths'>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of [reference.path, ...(reference.extraPaths ?? [])]) {
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      out.push(p);
+    }
+  }
+  return out;
 }
 
 function refDir(): Directory {
@@ -44,9 +61,15 @@ export async function getPreviewReference(): Promise<PreviewReference | null> {
     try {
       const parsed = JSON.parse(row.value) as PreviewReference;
       if (!parsed?.path) return null;
-      // 文件被清理时视为无参考（记录不假装有效）
-      if (!new File(Paths.document, parsed.path).exists) return null;
-      return parsed;
+      const existingPaths = allReferencePaths(parsed).filter((p) => new File(Paths.document, p).exists);
+      if (existingPaths.length === 0) return null;
+      const [mainPath, ...rest] = existingPaths;
+      return {
+        path: mainPath,
+        ...(rest.length ? { extraPaths: rest } : null),
+        updatedAt: parsed.updatedAt,
+        ...(parsed.kind ? { kind: parsed.kind } : null),
+      };
     } catch {
       return null;
     }
@@ -107,6 +130,7 @@ export async function savePreviewReference(input: {
 
   const record: PreviewReference = {
     path: `preview-ref/${fileName}`,
+    ...(previous?.extraPaths?.length ? { extraPaths: previous.extraPaths } : null),
     updatedAt: new Date().toISOString(),
     ...(previous?.kind ? { kind: previous.kind } : null),
   };
@@ -143,27 +167,25 @@ export async function savePreviewReference(input: {
   return record;
 }
 
-/** 移除人物参考（文件与记录一并清除；不存在时静默；删文件失败登记待清理） */
+/** 移除全部人物参考（所有文件与记录一并清除；不存在时静默；删文件失败登记待清理） */
 export async function removePreviewReference(): Promise<void> {
   const db = await getDb();
   const current = await getPreviewReference();
   if (current) {
-    try {
-      const file = new File(Paths.document, current.path);
-      if (file.exists) file.delete();
-    } catch (error) {
-      await recordPendingCleanup('preview-ref', current.path, error instanceof Error ? error.message : String(error));
+    for (const p of allReferencePaths(current)) {
+      try {
+        const file = new File(Paths.document, p);
+        if (file.exists) file.delete();
+      } catch (error) {
+        await recordPendingCleanup('preview-ref', p, error instanceof Error ? error.message : String(error));
+      }
     }
   }
   await db.runAsync('DELETE FROM preferences WHERE id = ?', REFERENCE_ID);
 }
 
-/** C3：声明参考视角（面部特写/全身照）。视角影响提示词的诚实表述，
- * 变化视为参考版本变化（updatedAt 前移），旧预览不再标注"本方案"。 */
-export async function setPreviewReferenceKind(kind: 'face' | 'full_body'): Promise<void> {
-  const current = await getPreviewReference();
-  if (!current) return;
-  const record: PreviewReference = { path: current.path, updatedAt: new Date().toISOString(), kind };
+/** 写入人物参考记录（内部辅助） */
+async function persistPreviewReferenceRecord(record: PreviewReference): Promise<void> {
   const db = await getDb();
   const now = new Date().toISOString();
   await db.runAsync(
@@ -175,6 +197,124 @@ export async function setPreviewReferenceKind(kind: 'face' | 'full_body'): Promi
     now,
     now,
   );
+}
+
+/**
+ * 添加一张人物参考照（支持同一人多张：首张为主参考，后续追加到 extraPaths，上限 MAX_PERSON_REFERENCE_PHOTOS）。
+ */
+export async function addPreviewReferencePhoto(input: {
+  sourceUri: string;
+  sourceWidth: number;
+  sourceHeight: number;
+}): Promise<PreviewReference> {
+  const current = await getPreviewReference();
+  if (!current) {
+    return savePreviewReference(input);
+  }
+  const existing = allReferencePaths(current);
+  if (existing.length >= MAX_PERSON_REFERENCE_PHOTOS) {
+    throw new Error(`最多保存 ${MAX_PERSON_REFERENCE_PHOTOS} 张人物参考照`);
+  }
+
+  const builder = ImageManipulator.ImageManipulator.manipulate(input.sourceUri);
+  if (input.sourceWidth > REFERENCE_MAX_DIMENSION || input.sourceHeight > REFERENCE_MAX_DIMENSION) {
+    const scale = REFERENCE_MAX_DIMENSION / Math.max(input.sourceWidth, input.sourceHeight);
+    builder.resize({
+      width: Math.round(input.sourceWidth * scale),
+      height: Math.round(input.sourceHeight * scale),
+    });
+  }
+  const rendered = await builder.renderAsync();
+  const saved = await rendered.saveAsync({ compress: 0.85, format: ImageManipulator.SaveFormat.JPEG });
+
+  const dir = refDir();
+  const fileName = `reference-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}.jpg`;
+  const target = new File(dir, fileName);
+  new File(saved.uri).move(target);
+  let moved = target.exists;
+  for (let i = 0; !moved && i < 5; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    moved = target.exists;
+  }
+  if (!moved) throw new Error('人物参考落盘失败（文件不可读）');
+
+  const addedPath = `preview-ref/${fileName}`;
+  const record: PreviewReference = {
+    path: current.path,
+    extraPaths: [...(current.extraPaths ?? []), addedPath],
+    updatedAt: new Date().toISOString(),
+    ...(current.kind ? { kind: current.kind } : null),
+  };
+  try {
+    await persistPreviewReferenceRecord(record);
+  } catch (error) {
+    try {
+      target.delete();
+    } catch {
+      await recordPendingCleanup('preview-ref', addedPath, '保存补充人物参考失败后清理文件失败');
+    }
+    throw error;
+  }
+  return record;
+}
+
+/** 将已保存的某张人物参考照设为主参考（推动 updatedAt） */
+export async function setPrimaryPreviewReferencePhoto(targetPath: string): Promise<PreviewReference | null> {
+  const current = await getPreviewReference();
+  if (!current) return null;
+  const paths = allReferencePaths(current);
+  if (!paths.includes(targetPath) || current.path === targetPath) return current;
+  const rest = paths.filter((p) => p !== targetPath);
+  const record: PreviewReference = {
+    path: targetPath,
+    ...(rest.length ? { extraPaths: rest } : null),
+    updatedAt: new Date().toISOString(),
+    ...(current.kind ? { kind: current.kind } : null),
+  };
+  await persistPreviewReferenceRecord(record);
+  return record;
+}
+
+/** 删除单张人物参考照（删主图时若有剩余则自动补位；删光则清记录） */
+export async function removePreviewReferencePhoto(targetPath: string): Promise<PreviewReference | null> {
+  const current = await getPreviewReference();
+  if (!current) return null;
+  const paths = allReferencePaths(current);
+  if (!paths.includes(targetPath)) return current;
+  const remaining = paths.filter((p) => p !== targetPath);
+  if (remaining.length === 0) {
+    await removePreviewReference();
+    return null;
+  }
+  const [nextMain, ...nextExtra] = remaining;
+  const record: PreviewReference = {
+    path: nextMain,
+    ...(nextExtra.length ? { extraPaths: nextExtra } : null),
+    updatedAt: new Date().toISOString(),
+    ...(current.kind ? { kind: current.kind } : null),
+  };
+  await persistPreviewReferenceRecord(record);
+  try {
+    const file = new File(Paths.document, targetPath);
+    if (file.exists) file.delete();
+  } catch (error) {
+    await recordPendingCleanup('preview-ref', targetPath, error instanceof Error ? error.message : String(error));
+  }
+  return record;
+}
+
+/** C3：声明参考视角（面部特写/全身照）。视角影响提示词的诚实表述，
+ * 变化视为参考版本变化（updatedAt 前移），旧预览不再标注"本方案"。 */
+export async function setPreviewReferenceKind(kind: 'face' | 'full_body'): Promise<void> {
+  const current = await getPreviewReference();
+  if (!current) return;
+  const record: PreviewReference = {
+    path: current.path,
+    ...(current.extraPaths?.length ? { extraPaths: current.extraPaths } : null),
+    updatedAt: new Date().toISOString(),
+    kind,
+  };
+  await persistPreviewReferenceRecord(record);
 }
 
 // ---------------------------------------------------------------------------
