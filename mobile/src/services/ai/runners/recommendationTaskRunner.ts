@@ -10,6 +10,7 @@
 import { getConfig, getApiKey } from '../configStore';
 import { callRevisionOf, type ModelConfig } from '../types';
 import { chatCompletion } from '../clients/openaiClient';
+import { ANALYSIS_MAX_TOKENS } from '../garmentAnalysis';
 import {
   categoryToSlotRole,
   normalizeRecommendation,
@@ -68,9 +69,12 @@ export interface RecommendationRunner {
   handleExternalChange(): Promise<void>;
 }
 
-const EXECUTE_WATCHDOG_MS = 90000;
-const CHAT_TIMEOUT_MS = 60000;
+const EXECUTE_WATCHDOG_MS = 120000;
+const CHAT_TIMEOUT_MS = 90000;
 const UNKNOWN_OUTCOME_KINDS: readonly string[] = ['timeout', 'network', 'cancelled'];
+// GLM 等思考型模型的思考 token 计入 max_tokens（真机 2026-11-25 复现：预算 2048 被思考耗尽，
+// 正文为空或候选 JSON 被截断）。与衣物分析同预算同超时（garmentAnalysis 2026-11-13 同坑修复）。
+const RECOMMENDATION_MAX_TOKENS = ANALYSIS_MAX_TOKENS;
 
 /** 快照身材资料消毒：只保留正数值字段，脏数据不进提示词 */
 function sanitizeBody(input?: { heightCm?: number; weightKg?: number } | null): {
@@ -229,6 +233,7 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
     const controller = new AbortController();
     markSent();
     let content: string;
+    let finishReason: string | null | undefined;
     try {
       const chat = await chatCompletion(
         { urlKind: config.urlKind, baseUrl: config.baseUrl, modelId: config.modelId },
@@ -250,7 +255,7 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
           },
         ],
         CHAT_TIMEOUT_MS,
-        { maxTokens: 2048, signal: controller.signal },
+        { maxTokens: RECOMMENDATION_MAX_TOKENS, signal: controller.signal },
       );
       if (!chat.ok) {
         const failure = chat.error ?? { kind: 'unknown', message: '调用失败' };
@@ -263,16 +268,19 @@ export function createRecommendationTaskRunner(deps: RecommendationRunnerDeps): 
         return;
       }
       content = chat.content;
+      finishReason = chat.finishReason;
     } finally {
       void controller;
     }
 
     const parsedContent = parseRecommendationContent(content);
     if (!parsedContent.ok) {
+      // 截断如实透出：finish_reason=length 说明输出停在 max_tokens（预算不足或资料过多），不伪造原因
+      const lengthHint = finishReason === 'length' ? '（输出在 max_tokens 处被截断）' : '';
       await deps.updateStatus(task.id, ['running'], 'failed', {
         finishedAt: new Date().toISOString(),
         errorKind: 'invalid_output',
-        errorSummary: parsedContent.error,
+        errorSummary: parsedContent.error + lengthHint,
       });
       return;
     }

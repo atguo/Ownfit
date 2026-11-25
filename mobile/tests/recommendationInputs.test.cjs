@@ -489,6 +489,68 @@ test('F2：执行用快照档案与别名映射；归档快照内单品 → stal
   }
 });
 
+// ---------------------------------------------------------------------------
+// 思考型模型 token 预算回归（2026-11-25 真机复现）：GLM 思考计入 max_tokens，
+// 预算 2048 时正文为空或候选 JSON 被截断；与衣物分析同坑同预算（40960/90s）
+// ---------------------------------------------------------------------------
+
+test('推荐请求预算：max_tokens=40960、超时 90s（对齐衣物分析）', async () => {
+  let capturedTimeoutMs = null;
+  let capturedOptions = null;
+  const pipeline = await loadPipeline(async (_config, _key, _messages, timeoutMs, options) => {
+    capturedTimeoutMs = timeoutMs;
+    capturedOptions = options;
+    return { ok: true, content: OK_CONTENT };
+  });
+  const { db, store, runner, close } = pipeline;
+  try {
+    seedItem(db, 'item-real-1', '上衣');
+    seedItem(db, 'item-real-2', '下装');
+    seedItem(db, 'item-real-3', '鞋履');
+    const enq = await store.enqueueRecommendation({
+      scene: { city: '北京', day: '今天', scene: '约会' },
+      configId: 'cfg-1',
+    });
+    runner.setForeground(true);
+    const row = await waitForTerminal(db, enq.taskId);
+    runner.setForeground(false);
+    assert.equal(row.status, 'succeeded');
+    assert.equal(capturedTimeoutMs, 90000);
+    assert.equal(capturedOptions.maxTokens, 40960);
+  } finally {
+    runner.setForeground(false);
+    close();
+  }
+});
+
+test('invalid_output：finish_reason=length 时错误如实标注截断', async () => {
+  const pipeline = await loadPipeline(async () => ({
+    ok: true,
+    content: '{"candidates":[{"slots":[{"role":"top","itemId":"item-1"',
+    finishReason: 'length',
+  }));
+  const { db, store, runner, close } = pipeline;
+  try {
+    seedItem(db, 'item-real-1', '上衣');
+    seedItem(db, 'item-real-2', '下装');
+    seedItem(db, 'item-real-3', '鞋履');
+    const enq = await store.enqueueRecommendation({
+      scene: { city: '北京', day: '今天', scene: '约会' },
+      configId: 'cfg-1',
+    });
+    runner.setForeground(true);
+    const row = await waitForTerminal(db, enq.taskId);
+    runner.setForeground(false);
+    assert.equal(row.status, 'failed');
+    assert.equal(row.error_kind, 'invalid_output');
+    assert.match(row.error_summary, /不是完整的 JSON 对象/);
+    assert.match(row.error_summary, /max_tokens 处被截断/);
+  } finally {
+    runner.setForeground(false);
+    close();
+  }
+});
+
 test('F2：快照内单品被改属性 → stale（版本不同不冒充当前资料）', async () => {
   const pipeline = await loadPipeline(async () => ({ ok: true, content: OK_CONTENT }));
   const { db, store, runner, close } = pipeline;
@@ -1088,6 +1150,82 @@ test('方案落库：source/reason 持久化；更新分支同步 source', async
     );
     const legacy = db.prepare('SELECT source FROM plans ORDER BY created_at DESC').get();
     assert.equal(legacy.source, 'manual');
+  } finally {
+    close();
+  }
+});
+
+test('本次生成与最近推荐分离：入队记录当前任务，历史列表按完成倒序且可清理', async () => {
+  const { db, adapter, close } = await freshDb();
+  try {
+    seedItem(db, 'item-a', '上衣');
+    seedItem(db, 'item-b', '下装');
+    const config = {
+      id: 'cfg-text',
+      name: 'GLM',
+      urlKind: 'openai',
+      baseUrl: 'https://example.com/v1',
+      modelId: 'glm-5',
+      capabilities: ['text'],
+      enabled: true,
+      callRevision: 'rev-1',
+    };
+    const loader = createLoader(adapter, {
+      [path.join(SRC, 'services', 'ai', 'configStore.ts')]: {
+        getConfig: (id) => (id === config.id ? config : null),
+        getApiKey: async () => 'k',
+      },
+      [path.join(SRC, 'features', 'demoStore.ts')]: {
+        getContextSnapshot: () => ({ city: '上海', day: '今天', scene: '通勤', temp: '20℃', tempSource: 'manual' }),
+      },
+    });
+    const store = loader.load(path.join(SRC, 'features', 'recommendationStore.ts'));
+    const repo = loader.load(path.join(SRC, 'data', 'repositories', 'recommendationRepository.ts'));
+
+    // 初始无当前任务
+    assert.equal(await store.loadCurrentRecommendation(), null);
+
+    // 第一次入队并完成
+    const r1 = await store.enqueueRecommendation({
+      scene: { city: '上海', day: '今天', scene: '通勤' },
+      configId: config.id,
+      note: '第一次',
+    });
+    assert.equal(r1.status, 'created');
+    assert.equal(store.getCurrentRecommendationTaskId(), r1.taskId);
+    const cur1 = await store.loadCurrentRecommendation();
+    assert.equal(cur1.id, r1.taskId);
+    assert.equal(cur1.status, 'queued');
+
+    await repo.updateRecommendationTaskStatus(r1.taskId, ['queued'], 'running');
+    await repo.commitRecommendationResult(r1.taskId, {
+      candidates: [{ slots: [{ role: 'top', itemId: 'item-a' }], wearStyle: '自然垂放' }],
+      gaps: [],
+    });
+    await repo.updateRecommendationTaskStatus(r1.taskId, ['running'], 'succeeded', {
+      finishedAt: '2026-11-25T10:00:00.000Z',
+    });
+
+    // 第二次入队：当前任务切到 r2，最近推荐包含 r1
+    const r2 = await store.enqueueRecommendation({
+      scene: { city: '上海', day: '今天', scene: '约会' },
+      configId: config.id,
+      note: '第二次',
+    });
+    assert.equal(r2.status, 'created');
+    const cur2 = await store.loadCurrentRecommendation();
+    assert.equal(cur2.id, r2.taskId);
+    const recent = await store.loadRecentRecommendations(5);
+    assert.deepEqual(
+      recent.map((t) => t.id),
+      [r1.taskId],
+    );
+
+    // 删除当前任务并清理引用后，loadCurrentRecommendation 不再返回已删任务
+    await repo.deleteRecommendationTask(r2.taskId);
+    store.clearCurrentRecommendationTaskId(r2.taskId);
+    assert.equal(store.getCurrentRecommendationTaskId(), null);
+    assert.equal(await store.loadCurrentRecommendation(), null);
   } finally {
     close();
   }
