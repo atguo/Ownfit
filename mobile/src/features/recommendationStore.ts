@@ -403,8 +403,39 @@ export async function enqueueRecommendation(
       createdAt: new Date().toISOString(),
     }),
   });
+  currentSessionTaskId = result.taskId;
   notifyRecommendationChanged();
   return result;
+}
+
+/** 本次会话中最近发起的推荐任务 ID（区分「本次生成搭配」与「最近推荐」） */
+let currentSessionTaskId: string | null = null;
+
+export function getCurrentRecommendationTaskId(): string | null {
+  return currentSessionTaskId;
+}
+
+export function clearCurrentRecommendationTaskId(taskId?: string): void {
+  if (!taskId || currentSessionTaskId === taskId) {
+    currentSessionTaskId = null;
+  }
+}
+
+/** 当前这次推荐任务：优先取本会话发起的任务，其次取库里仍在进行的任务 */
+export async function loadCurrentRecommendation() {
+  if (currentSessionTaskId) {
+    const task = await getRecommendationTask(currentSessionTaskId);
+    if (task) return task;
+    currentSessionTaskId = null;
+  }
+  const { getLatestActiveRecommendation } = await import('../data/repositories/recommendationRepository');
+  return getLatestActiveRecommendation();
+}
+
+/** 最近已结束的推荐任务列表（面板「最近推荐」展示） */
+export async function loadRecentRecommendations(limit = 5) {
+  const { listRecentFinishedRecommendations } = await import('../data/repositories/recommendationRepository');
+  return listRecentFinishedRecommendations(limit);
 }
 
 /** 最近一次已完成的推荐任务（面板展示） */

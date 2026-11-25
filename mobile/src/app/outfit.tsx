@@ -132,6 +132,8 @@ export default function OutfitScreen() {
    * 其余槽位随请求锁定；候选在执行端按"只允许目标槽位变化"本地校验，
    * 采用走会话的单次替换（保留其他件/逐件穿法/撤销）。 */
   async function aiSwapSlot(slot: OutfitSlot) {
+    // 首击无响应修复（2026-11-16）：解析前给即时反馈，避免慢解析期间"点了没反应"
+    toast('正在读取模型配置…');
     const resolution = await resolveTextForRecommendation();
     if (resolution.status !== 'ready') {
       Alert.alert(

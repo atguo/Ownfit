@@ -11,13 +11,15 @@ import { Notice, Spinner, Tag } from '../../ui/components/Basics';
 import { Field, TextField } from '../../ui/components/Field';
 import { useToast } from '../../ui/components/Toast';
 import {
+  clearCurrentRecommendationTaskId,
   enqueueRecommendation,
   evaluateAdoption,
   getItemAvailability,
   hasActiveRecommendation,
-  loadLatestRecommendation,
+  loadCurrentRecommendation,
+  loadRecentRecommendations,
   loadSceneSnapshot,
-  loadWardrobeProfile,
+  notifyRecommendationChanged,
   rememberDefaultRecommendationConfig,
   resolveTextForRecommendation,
   subscribeRecommendationChanges,
@@ -108,7 +110,8 @@ export function RecommendationSheet({
   const router = useRouter();
   const toast = useToast();
   const [resolution, setResolution] = useState<ConfigResolution | null>(null);
-  const [task, setTask] = useState<RecommendationTask | null>(null);
+  const [currentTask, setCurrentTask] = useState<RecommendationTask | null>(null);
+  const [recentTasks, setRecentTasks] = useState<RecommendationTask[]>([]);
   const [active, setActive] = useState(false);
   const [scene, setScene] = useState<{
     city: string;
@@ -124,9 +127,16 @@ export function RecommendationSheet({
   const [lockedWarnings, setLockedWarnings] = useState<string[]>([]);
 
   const reload = useCallback(async () => {
-    setTask(await loadLatestRecommendation());
-    setActive(await hasActiveRecommendation());
-    setScene(await loadSceneSnapshot());
+    const [current, recent, isActive, currentScene] = await Promise.all([
+      loadCurrentRecommendation(),
+      loadRecentRecommendations(5),
+      hasActiveRecommendation(),
+      loadSceneSnapshot(),
+    ]);
+    setCurrentTask(current);
+    setRecentTasks(current ? recent.filter((item) => item.id !== current.id) : recent);
+    setActive(isActive);
+    setScene(currentScene);
     const session = getOutfitSession();
     if (session.active && session.locks.length > 0) {
       const warnings: string[] = [];
@@ -195,6 +205,8 @@ export function RecommendationSheet({
                 '../../data/repositories/recommendationRepository'
               );
               await deleteRecommendationTask(taskId);
+              clearCurrentRecommendationTaskId(taskId);
+              notifyRecommendationChanged();
               toast('已删除');
               await reload();
             } catch (error) {
@@ -206,9 +218,16 @@ export function RecommendationSheet({
     ]);
   }
 
-  function onPressGenerate() {
-    if (!resolution) return;
-    if (resolution.status === 'missing') {
+  async function onPressGenerate() {
+    // 首击无响应修复（2026-11-16 真机缺陷）：resolution/scene 异步就绪前点按原为静默返回，
+    // 现改为就地补齐解析后继续执行，任何分支都有可见反馈，不再有"点了没反应"。
+    let res = resolution;
+    if (!res) {
+      toast('正在读取模型配置…');
+      res = await resolveTextForRecommendation();
+      setResolution(res);
+    }
+    if (res.status === 'missing') {
       Alert.alert(
         '还没有文本模型',
         'AI 推荐使用文本模型（如 GLM / DeepSeek，OpenAI 兼容）。\n到「我的 → 模型配置」添加配置，能力勾选“文本”。',
@@ -216,18 +235,24 @@ export function RecommendationSheet({
       );
       return;
     }
-    if (resolution.status === 'invalid') {
-      Alert.alert('模型配置不可用', resolution.message, [{ text: '知道了' }]);
+    if (res.status === 'invalid') {
+      Alert.alert('模型配置不可用', res.message, [{ text: '知道了' }]);
       return;
     }
-    if (resolution.status === 'choose') return; // 由下方候选列表选择，不静默切换
-    start(resolution.config.id);
+    if (res.status === 'choose') return; // 由下方候选列表选择，不静默切换
+    let currentScene = scene;
+    if (!currentScene) {
+      toast('正在读取场景…');
+      currentScene = await loadSceneSnapshot();
+      setScene(currentScene);
+    }
+    start(res.config.id);
   }
 
   /** 采用候选（S1，评估 §8.2.6）：可用性与品类映射复核 → 读取任务快照做采用决策 →
    * 整套采用（保留原请求锁定）或局部替换（会话单次变更，保留其他件/穿法/撤销）。
    * 会话基线/锁定已变化时停止采用并提示重新推荐，不把旧候选覆盖新编辑。 */
-  async function adopt(candidate: RecommendationCandidate) {
+  async function adopt(candidate: RecommendationCandidate, sourceTask: RecommendationTask) {
     const session = getOutfitSession();
     const slots: Partial<Record<'top' | 'dress' | 'bottom' | 'shoes' | 'outer', string>> = {};
     const adoptedIds: string[] = [];
@@ -258,7 +283,7 @@ export function RecommendationSheet({
       return;
     }
     // 候选单品的资料版本仍与请求一致（等待期间被改过 → 提示重新推荐）
-    const stored = parseRecommendationInputV2(task?.inputJson ?? null);
+    const stored = parseRecommendationInputV2(sourceTask.inputJson ?? null);
     if (stored) {
       const revisions = await verifySnapshotRevisions(stored, adoptedIds);
       if (!revisions.ok) {
@@ -311,6 +336,14 @@ export function RecommendationSheet({
   }
 
   function renderTaskBlock(t: RecommendationTask): React.ReactNode {
+    const timeLabel = formatLocal(t.finishedAt ?? t.createdAt);
+    const isFinished =
+      t.status === 'succeeded' ||
+      t.status === 'failed' ||
+      t.status === 'interrupted' ||
+      t.status === 'blocked' ||
+      t.status === 'stale';
+
     if (t.status === 'running' || t.status === 'queued') {
       return (
         <View style={styles.card}>
@@ -319,12 +352,18 @@ export function RecommendationSheet({
         </View>
       );
     }
-    if (t.status === 'failed' || t.status === 'interrupted' || t.status === 'blocked') {
+    if (
+      t.status === 'failed' ||
+      t.status === 'interrupted' ||
+      t.status === 'blocked' ||
+      t.status === 'stale'
+    ) {
       return (
         <View style={styles.card}>
+          <Text style={styles.taskTime}>{timeLabel}</Text>
           <Text style={styles.note}>
-            {t.status === 'blocked'
-              ? t.errorSummary ?? '模型配置已变化，请重新生成'
+            {t.status === 'blocked' || t.status === 'stale'
+              ? t.errorSummary ?? '输入或模型配置已变化，请重新生成'
               : `${t.status === 'interrupted' ? '结果未知' : '生成失败'}：${t.errorSummary ?? '未知原因'}`}
           </Text>
           <Button
@@ -337,7 +376,9 @@ export function RecommendationSheet({
                 void resolveTextForRecommendation().then(setResolution);
               }
             }}
+            style={styles.gap}
           />
+          <Button variant="text" label="删除这条推荐记录" onPress={() => confirmDelete(t.id)} />
         </View>
       );
     }
@@ -346,8 +387,9 @@ export function RecommendationSheet({
     const replaceSlot = stored?.mode === 'replace_slot' ? stored.targetSlot : null;
     return (
       <View>
+        <Text style={styles.taskTime}>{`${timeLabel} · ${t.candidates.length} 套候选`}</Text>
         {t.candidates.map((candidate, index) => (
-          <View key={`${index}-${candidate.wearStyle}`} style={styles.card}>
+          <View key={`${t.id}-${index}-${candidate.wearStyle}`} style={styles.card}>
             <View style={styles.candidateHead}>
               <Tag label={replaceSlot ? `只换${SLOT_LABELS[UI_SLOT_TO_ROLE[replaceSlot] ?? ''] ?? ''}` : `候选 ${index + 1}`} />
               <Text style={styles.wearStyleText}>{candidate.wearStyle}</Text>
@@ -371,11 +413,16 @@ export function RecommendationSheet({
             <Button
               variant="primary"
               label="用这套搭配"
-              onPress={() => void adopt(candidate)}
+              onPress={() => void adopt(candidate, t)}
               style={styles.gap}
             />
           </View>
         ))}
+        {t.gaps.length > 0 ? <Notice>{`档案缺口：${t.gaps.join('；')}`}</Notice> : null}
+        {t.summary ? <Text style={styles.reason}>{t.summary}</Text> : null}
+        {isFinished ? (
+          <Button variant="text" label="删除这条推荐记录" onPress={() => confirmDelete(t.id)} />
+        ) : null}
       </View>
     );
   }
@@ -406,10 +453,18 @@ export function RecommendationSheet({
       <Button
         variant="primary"
         label={starting || active ? 'AI 搭配中…' : '生成候选组合'}
-        onPress={onPressGenerate}
+        onPress={() => void onPressGenerate()}
         disabled={starting || active || resolution?.status === 'choose'}
       />
-      {active ? <Spinner /> : null}
+
+      {currentTask ? (
+        <View>
+          <Text style={styles.sectionTitle}>本次生成搭配</Text>
+          {renderTaskBlock(currentTask)}
+        </View>
+      ) : active ? (
+        <Spinner />
+      ) : null}
 
       {/* B1：请求摘要——本次发送给 AI 的约束可见可改；全部可跳过，不增加每日问卷 */}
       {scene ? (
@@ -442,85 +497,19 @@ export function RecommendationSheet({
       ) : null}
 
       <Text style={styles.sectionTitle}>最近推荐</Text>
-      {!task ? (
+      {recentTasks.length === 0 ? (
         <Text style={styles.note}>
-          还没有推荐记录。生成后，候选会显示在这里，可复核后直接进入搭配编辑。
+          {currentTask
+            ? '暂无更早的推荐记录。'
+            : '还没有推荐记录。生成后，候选会显示在上方，更早的记录也会保留在这里。'}
         </Text>
-      ) : null}
-      {task && (task.status === 'running' || task.status === 'queued') ? (
-        <View style={styles.card}>
-          <Text style={styles.note}>{task.status === 'queued' ? '排队中…' : 'AI 搭配中…（约 30-60 秒）'}</Text>
-          <Spinner />
-        </View>
-      ) : null}
-      {task &&
-      (task.status === 'failed' || task.status === 'interrupted' || task.status === 'blocked') ? (
-        <View style={styles.card}>
-          <Text style={styles.note}>
-            {task.status === 'blocked'
-              ? task.errorSummary ?? '模型配置已变化，请重新生成'
-              : `${task.status === 'interrupted' ? '结果未知' : '生成失败'}：${task.errorSummary ?? '未知原因'}`}
-          </Text>
-          <Button
-            variant="secondary"
-            label={resolution?.status === 'ready' ? '重试' : '重试（需先选择模型）'}
-            onPress={() => {
-              if (resolution?.status === 'ready') {
-                start(resolution.config.id);
-              } else {
-                void resolveTextForRecommendation().then(setResolution);
-              }
-            }}
-          />
-        </View>
-      ) : null}
-      {(() => {
-        const stored = task ? parseRecommendationInputV2(task.inputJson) : null;
-        const replaceSlot = stored?.mode === 'replace_slot' ? stored.targetSlot : null;
-        return task?.candidates?.map((candidate, index) => (
-          <View key={`${index}-${candidate.wearStyle}`} style={styles.card}>
-            <View style={styles.candidateHead}>
-              <Tag label={replaceSlot ? `只换${SLOT_LABELS[UI_SLOT_TO_ROLE[replaceSlot] ?? ''] ?? ''}` : `候选 ${index + 1}`} />
-              <Text style={styles.wearStyleText}>{candidate.wearStyle}</Text>
-            </View>
-            {replaceSlot && stored ? (
-              <ReplaceInfoLine
-                stored={stored as typeof stored & { mode: 'replace_slot'; targetSlot: string }}
-                candidate={candidate}
-              />
-            ) : null}
-            <View style={styles.slotRow}>
-              {candidate.slots.map((slot) => (
-                <ItemThumb
-                  key={`${slot.role}-${slot.itemId}`}
-                  itemId={slot.itemId}
-                  label={SLOT_LABELS[slot.role] ?? slot.role}
-                />
-              ))}
-            </View>
-            {candidate.reason ? <Text style={styles.reason}>{candidate.reason}</Text> : null}
-            <Button
-              variant="primary"
-              label="用这套搭配"
-              onPress={() => void adopt(candidate)}
-              style={styles.gap}
-            />
+      ) : (
+        recentTasks.map((item) => (
+          <View key={item.id} style={styles.historyBlock}>
+            {renderTaskBlock(item)}
           </View>
-        ));
-      })()}
-      {task && task.gaps.length > 0 ? <Notice>{`档案缺口：${task.gaps.join('；')}`}</Notice> : null}
-      {task?.summary ? <Text style={styles.reason}>{task.summary}</Text> : null}
-      {task &&
-      (task.status === 'succeeded' ||
-        task.status === 'failed' ||
-        task.status === 'interrupted' ||
-        task.status === 'blocked') ? (
-        <Button
-          variant="text"
-          label="删除这条推荐记录"
-          onPress={() => confirmDelete(task.id)}
-        />
-      ) : null}
+        ))
+      )}
     </Sheet>
   );
 }
@@ -534,16 +523,24 @@ function ItemThumb({ itemId, label }: { itemId: string; label: string }) {
   const [uri, setUri] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   useEffect(() => {
+    let mounted = true;
+    setUri(null);
+    setMissing(false);
     void (async () => {
       const item = await getItem(itemId);
+      if (!mounted) return;
       if (!item || item.status !== 'active' || !item.mainPhotoId) {
         setMissing(true);
         return;
       }
       const paths = await getMainPhotoPaths(itemId);
+      if (!mounted) return;
       if (paths) setUri(photoUri(paths.thumbPath));
       else setMissing(true);
     })();
+    return () => {
+      mounted = false;
+    };
   }, [itemId]);
   return (
     <View style={styles.thumbWrap}>
@@ -576,6 +573,14 @@ const styles = StyleSheet.create({
     ...type.sectionHead,
     color: colors.ink,
     marginTop: 16,
+    marginBottom: 8,
+  },
+  taskTime: {
+    ...type.micro,
+    color: colors.muted,
+    marginBottom: 6,
+  },
+  historyBlock: {
     marginBottom: 8,
   },
   card: {

@@ -190,6 +190,27 @@ export async function getLatestFinishedRecommendation(): Promise<RecommendationT
   return row ? rowToTask(row) : null;
 }
 
+/** 最近已结束的推荐任务列表（面板「最近推荐」展示；新→旧） */
+export async function listRecentFinishedRecommendations(limit = 5): Promise<RecommendationTask[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<TaskRow>(
+    "SELECT * FROM tasks WHERE kind = ? AND status IN ('succeeded','failed','interrupted','blocked','stale') ORDER BY COALESCE(finished_at, created_at) DESC, rowid DESC LIMIT ?",
+    RECOMMENDATION_TASK_KIND,
+    limit,
+  );
+  return rows.map(rowToTask);
+}
+
+/** 当前进行中的推荐任务（queued/running，最新一条） */
+export async function getLatestActiveRecommendation(): Promise<RecommendationTask | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<TaskRow>(
+    "SELECT * FROM tasks WHERE kind = ? AND status IN ('running','queued') ORDER BY created_at DESC, rowid DESC LIMIT 1",
+    RECOMMENDATION_TASK_KIND,
+  );
+  return row ? rowToTask(row) : null;
+}
+
 export function updateRecommendationTaskStatus(
   id: string,
   allowedFrom: RecommendationTaskStatus[],
