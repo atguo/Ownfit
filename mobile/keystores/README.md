@@ -72,6 +72,9 @@ grep -n 'keystore.properties' mobile/android/app/build.gradle     # 路径应为
 
 - **定位：仅供开发者本机走查，不是交付物；严禁分发**（分发件只有正式签名的 `app-release.apk`）。
 - 后续决策（项目用户）：本机长期用走查包，或择期卸载一次换装正式签名包（卸载=清空本机衣橱资料，无云备份）。
+- 2026-11-16 重建（配置列表刷新修复后走查）：同流程重签，versionCode 1 / 0.6.0-beta1，119,498,158 字节，SHA-256 `48fc4489351d8963e672c0f3dd6681ad9f80e9fdc6b0566bf4c3580dfbacb217`（CN=Android Debug），`pm install -r` 覆盖 2026-11-13 debug dev client 成功、资料保留；验签与 manifest 核验通过。同目录 outputs 下 `app-release.apk` 为当日正式签名构建（CN=Ownfit 证书，SHA-256 `fe546cf6…` 同 11-10 证书），未被重签污染。
+- 2026-11-16 二次重建（追加"首击无 loading"修复：推荐/预览生成与 AI 替代按钮解析未就绪时静默返回）：SHA-256 `dbf6a87800fd193226c1cf006f4d02760ac31ee02809f564fda1f9e3aa7225ee`，覆盖安装成功并完成首击真机复核（单击即出现"AI 搭配中…"）；已被 11-25 重建取代。
+- 2026-11-25 重建（工作区未提交的 openai_images 通用 OpenAI 图像兼容协议 + 多图参考显式图号绑定，即 imageClient.ts/openaiImagesClient.ts 新文件，支持火山方舟 Seedream 5.0 等多图参考接口）：119,543,214 字节，SHA-256 `f0e356b698eaff042ae3e00af823ba1e194bcb26c55c7813961b375b71eed2bb`，无线 adb push（2.0 MB/s，58s）+ `pm install -r` 覆盖安装成功，资料保留，应用启动进程正常（versionName 0.6.0-beta2 / versionCode 2，lastUpdateTime 2026-11-25 17:00:33）。**当前手机在装版本为此包**；`dbf6a878…` 版本已被取代。模型效果未经走查验证。
 
 ### 安装与 adb 的 Git Bash 路径坑（2026-11-10 实测）
 
@@ -80,8 +83,17 @@ grep -n 'keystore.properties' mobile/android/app/build.gradle     # 路径应为
 或整条命令走 `cmd /c`。无线传输 119MB 建议先 `adb push` 到 `/data/local/tmp/` 再 `pm install -r`，
 流式 `adb install` 容易断流。
 
-### 已完成的首次正式构建记录（2026-11-10）
+### 正式分发包记录（0.6.0-beta2，2026-11-16，M6 批次 5 交付）
 
+- 产物：`mobile/android/app/build/outputs/apk/release/app-release.apk`，119,389,271 字节。
+- 版本：com.atguo.ownfit，versionName=0.6.0-beta2 / versionCode=2（可覆盖安装 0.6.0-beta1/versionCode 1 及更早），targetSdk 36，应用名「衣见」。
+- 包含 11-10 正式包之后的全部修复：H3-Image 接入、人物参考更新修复、配置列表刷新修复、首击无响应修复。
+- SHA-256：`8bf6a799dde558ff9eec1b80d84be7863a18294e5b42eb370cbea07225c26115`。
+- 验签：CN=Ownfit, OU=Ownfit, O=lipri, C=CN（正式证书，证书 SHA-256 `fe546cf6…` 与 11-10 一致）；manifest 未声明 usesCleartextTraffic 与 debuggable。
+- 分发状态（项目用户 2026-11-16 决定）：**内测分发暂缓**——效果优化期，达标前不分发；本包为分发就绪候选件。
+- 2026-11-25 重建（含 openai_images 多图参考改动）：119,433,199 字节，SHA-256 `f00bd48f7af181fd72f16a1e066a8ec8aa362ff416f038b6929c47e87e093701`（CN=Ownfit 正式证书），取代上条成为最新分发就绪候选件；versionName/versionCode 未变（0.6.0-beta2 / 2）。
+
+## 已完成的首次正式构建记录（2026-11-10）
 - 产物：`mobile/android/app/build/outputs/apk/release/app-release.apk`，119,376,219 字节（含 4 ABI 原生库）。
 - 版本：com.atguo.ownfit，versionName=0.6.0-beta1 / versionCode=1，targetSdk 36，应用名「衣见」。
 - SHA-256：`d9e2d4eb88dc940729f60d2ec5a88f4f00ef4b323a935f34160df89e782a4771`。

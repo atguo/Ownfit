@@ -2,15 +2,41 @@
 
 ## 当前结构（2026-11-13 结构收敛后更新）
 
-M0–M5 完成（M5 视同验收）；M6 进行中：批次 1/2 已收口，批次 3 于 2026-11-10 release 构建验签与走查包装机完成（正式包真机走查待项目用户），批次 4/5 未收口。详见 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md)。下文带日期记录保留历史语境，不以历史“0 次调用/待验收”覆盖后续证据。
+M0–M5 完成（M5 视同验收）；M6 进行中：批次 1/2 已收口，批次 3 于 2026-11-10 release 构建验签与走查包装机完成（正式包真机走查待项目用户），批次 4/5 未收口。详见 [M6 实施计划](../docs/plans/archive/真机质量验证与内测候选/2026-11-03-M6-真机质量验证与内测候选-实施计划.md)。下文带日期记录保留历史语境，不以历史“0 次调用/待验收”覆盖后续证据。
 
 - `src/app/`：根 Stack + `(tabs)/` 四主入口 + `choose`、`outfit`、`add` + `ai/config`、`ai/config-edit` + `dev/components`、`dev/data-tools`。预览为 `PreviewSheet` 弹层，当前没有独立 `preview.tsx` 路由。
 - `src/ui/`：设计令牌、图标、响应式页面容器与原生组件，真实搭配板为 `RealOutfitBoard`。
 - `src/domain/`：**业务规则唯一出处（2026-11-13 启用）**——`outfitRules.ts`（槽位映射、必需槽位组合、有效逐件穿法、缺口表达、会话→契约 Plan 构造，纯函数无副作用）、`categories.ts`（品类类型与全集）。不依赖 react 与 repository。
 - `src/data/`：SQLCipher schema v8、密钥管理与 user_version 迁移；repositories 包含衣物/照片/属性/方案/分析任务/预览（含核对/后处理/产物）/推荐/维护/设置（含长期偏好、场景默认、身材资料 body-profile）/颜色库。照片、人物参考和生成图保存在应用私有目录。
-- `src/services/`：`ai/clients/`（openaiClient、minimaxClient、testConnection 协议客户端）、`ai/runners/`（分析/预览/推荐三个任务执行器）、`ai/` 根（配置镜像 configStore、视觉路由 visionConfig、输入快照与归一化、提示词与解析、预览核对）——2026-11-13 分组归位，新代码按此落点；`weather.ts` 提供可选城市天气查询，`location.ts` 提供定位。非敏感 AI 配置存本地库 `ai_configs` 表（DB 为源 + 内存镜像），API Key 仍只在设备安全存储；服务地址仅接受 https（M6 批次 2 明文收敛）。
+- `src/services/`：`ai/clients/`（openaiClient、openaiImagesClient、minimaxClient、imageClient 协议分发、testConnection）、`ai/runners/`（分析/预览/推荐三个任务执行器）、`ai/` 根（配置镜像 configStore、视觉路由 visionConfig、输入快照与归一化、提示词与解析、预览核对）——2026-11-13 分组归位，新代码按此落点；`weather.ts` 提供可选城市天气查询，`location.ts` 提供定位。非敏感 AI 配置存本地库 `ai_configs` 表（DB 为源 + 内存镜像），API Key 仍只在设备安全存储；服务地址仅接受 https（M6 批次 2 明文收敛）。
 - `src/features/`：`outfitSession` 会话状态胶水（撤销栈、订阅与锁定/替换/穿法操作；槽位与契约构造等纯规则已移 `domain/outfitRules.ts`，会话来源 origin：manual/ai），分析/预览/推荐 store，`weatherAuto` 自动天气编排，`sheets/` 原生弹层。`demoStore` 承载当次场景等内存上下文；推荐已消费该当次场景（含温度来源区分，演示温度不进 AI）。
 - `plugins/`：Expo 配置插件（`withReleaseSigning.js` 注入 release 正式签名，经 prebuild 生效）；`keystores/`（git 忽略，README 入库）存放构建机本机的签名材料。
+
+### 通用 OpenAI 图像兼容协议接入（2026-11-25，项目用户指示）
+
+为支持切换至火山方舟豆包 `doubao-seedream-5-0-flash-260915` 等多图参考图像模型并减少后续换模型改代码成本：
+
+- `types.ts`：`UrlKind` 新增 `openai_images`（OpenAI 图像兼容）；新增 `isImageGenUrlKind`；`endpointFor('openai_images', baseUrl)` 自动拼接 `/images/generations`（若已填 `/images/generations` 或 `/images/edits` 完整路径则原样保留）。
+- `clients/openaiImagesClient.ts`：标准 JSON `POST .../images/generations`，支持 `image: [personDataUrl, ...garmentImages]` 多图参考、`size: '2K'`、`watermark: false`，响应兼容 `data[].url` 与 `data[].b64_json`。
+- `clients/imageClient.ts`：统一图像协议分发层（`generateImageByConfig` / `supportsGarmentReferenceImages`），`previewStore.ts` 与 `testConnection.ts` 不再硬编码绑定 MiniMax。
+- `visionConfig.ts` 与 `app/ai/config-edit.tsx`：路由放行全部 `isImageGenUrlKind` 协议；配置页新增“OpenAI 图像兼容”选项与火山方舟示例提示。
+- `runners/previewTaskRunner.ts`：`buildPrompt` 对多图参考路径按有效图顺位显式绑定 `[参考图2]`、`[参考图3]`（图 1 人物、缺图单品标 `[无实拍图，仅按文字]`，首次生成与 C8 纠偏共用），且对有实拍图的单品走真图主导精简模板（去冗长文字细节，仅留图号/品类/主色/穿法），缺图或纯文字路径仍保留完整文字特征。
+- `previewChecker.ts` 与 `PreviewSheet.tsx`：核对器新增人物一致性独立判定（`person` → `PERSON_VERDICT_ID='__person__'`，零 schema 变更兼容旧记录），人物偏离时 `buildCorrections` 优先输出人物一致性纠偏约束；预览面板对最终判定为 `major`（非核对/纠偏进行中）的结果启用硬门控拦截卡片（默认不展示跑偏图，支持手动展开排查）。
+- **衣物/人物拍摄指引与同实体多图支持（2026-11-25）**：零 schema 变更——`photoRepository` 新增 `listPhotosForItem`/`addExtraPhotoToItem`/`setMainPhotoForItem`/`deleteExtraPhotoFromItem`（单件最多 6 张，`add.tsx` 草稿卡可补图、`WardrobeItemSheet.tsx` 多图画廊支持设主图与删除）；`previewRepository` 的 `PreviewReference` 扩展 `extraPaths`（同一人最多 4 张，支持设主参考与单张删除，`maintenanceRepository` 同步保护避免误判孤儿）；`ProfileSheets.ReferenceSheet` 与 `add.tsx` 均新增拍摄示例建议卡片；多张人物照一并送入多图参考模型（`extraPersonImages`），`buildPrompt` 按人物张数顺延分配衣物参考图号。
+- **模型测试后保存状态保留与首次入库自动分析入库（2026-11-25，项目用户指示）**：①`configStore.ts`/`config-edit.tsx` 支持将针对当前表单参数刚完成的连接测试结果随 `addConfig`/`updateConfig` 一并落库（只改名不丢失既有测试状态，改连接参数未重测仍重置为未测试）；②`attributeRepository.commitGarmentAnalysis` 对首次草稿（`status='draft'` 且用户未填写 `category`/`name`）在分析成功识别单品与品类后同事务自动置 `active` 并填入 AI 推断品类与建议名称（`category` 属性行诚实标 `ai_inferred`/`unconfirmed`，不递增 `revision`，非单品/无品类保持草稿，已入库衣物绝不覆盖），`add.tsx` 实时将自动入库项移入“已自动分析入库”区反馈，并修复 `getAnalysisView` 未回退 AI 品类建议的问题。
+- 验证：`pnpm typecheck` 通过；`endpoint.test.cjs` 与 `coreGoalLoop.test.cjs` 新增上述断言，全量 mobile 回归通过。**未验证边界**：火山方舟真机实际调用、Base64 多图请求体上限与试穿保真效果——多图参考真机首验已于同日完成（见下节），Base64 请求体上限与保真效果仍待更多样本。
+- 真机首验补充（2026-11-25 晚）：项目用户实际使用模型 ID 为 `doubao-seedream-5-5-261028`，充值后连接测试通过（纯文生图，证明 URL 拼接/鉴权/`size:'2K'` 均被方舟接受）。
+
+### 推荐 token 预算修复与 Seedream 多图参考真机首验（2026-11-25，真机调试会话）
+
+项目用户报修「生成搭配失败」，真机两次复现（候选 JSON 截断 / 正文为空），根因与修复：
+
+- `runners/recommendationTaskRunner.ts`：根因=GLM-5.3-flash 为思考型模型，思考 token 计入 `max_tokens`，推荐预算 2048 被思考耗尽——正文为空或 JSON 被截断（衣物分析 2026-11-13 同坑当时已修至 40960，推荐调用漏改）。修复：`RECOMMENDATION_MAX_TOKENS = ANALYSIS_MAX_TOKENS`（40960，同源单一出处）、`CHAT_TIMEOUT_MS` 60s→90s（对齐 `ANALYSIS_TIMEOUT_MS`）、执行级看门狗 90s→120s（保持大于 chat 超时的必达终态语义）；`invalid_output` 失败在 `finish_reason='length'` 时错误摘要追加「（输出在 max_tokens 处被截断）」，不伪造格式原因。
+- 验证：`pnpm typecheck` 通过；mobile 回归 **183/183**（`recommendationInputs.test.cjs` 增 2 项：请求预算 40960/超时 90s 断言、`finish_reason=length` 截断标注断言）。
+- **真机结果（同日）**：推荐重跑 3 候选全部生成、理由连贯（预算修复闭环）；Seedream 多图参考首验成功——人物参考 + 3 件衣物实拍图，约 30-60s 返回，上衣格纹蝴蝶结/半裙花色还原、人物保持参考照镜子自拍姿态，自动核对「关键特征与原图一致」通过（无需纠偏）。至此 `openai_images` 协议链路（配置→连接测试→多图参考生成→自动核对）真机全通。
+- **未验证边界**：Seedream 生成效果仅单样本（构图、纠偏有效率、多图上限、与 H3 同条件对比待更多样本）；模型效果结论仍未知，不以工程通过等同效果达标。
+- **装机坑（同日实证，进了 memory）**：ColorOS `pm install -r` 后旧进程可能不被杀死（`am start` 报 "currently running top-most instance"），内存中旧 JS 继续服务，造成"装了新包行为依旧"的假象；装机后必须 `am force-stop` 再验证，pidof 存在不代表是新进程。
+- **推荐面板「本次生成搭配」与「最近推荐」分离（2026-11-25）**：`recommendationRepository.ts` 增 `listRecentFinishedRecommendations` / `getLatestActiveRecommendation`；`recommendationStore.ts` 记录本次会话发起的 `currentSessionTaskId` 并导出 `loadCurrentRecommendation` / `loadRecentRecommendations` / `clearCurrentRecommendationTaskId`；`RecommendationSheet.tsx` 在「生成候选组合」按钮下方独立展示「本次生成搭配」（生成中状态与当次候选图片缩略图/理由/采用），请求条件区下方「最近推荐」展示更早记录（自动排除当次任务、带本地时间戳，`adopt` 按来源任务快照复核）。验证：`pnpm typecheck` 通过、mobile 回归 **184/184**（`recommendationInputs.test.cjs` 增 1 项）；真机界面未实测。
 
 ### MiniMax-H3-Image 接入：预览真图参考路径（2026-11-13，项目用户指示）
 
@@ -83,7 +109,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 
 ### M6 批次 1：M5 登记缺口收尾（2026-11-03 实现完成，同日项目用户真机走查通过）
 
-依据 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md) 批次 1 落地四项：
+依据 [M6 实施计划](../docs/plans/archive/真机质量验证与内测候选/2026-11-03-M6-真机质量验证与内测候选-实施计划.md) 批次 1 落地四项：
 
 - **1.1 契约标识统一**：`packages/contract` 内部常量与 package.json 去 draft 统一 1.0.0；公共入口改为从 `schema.ts` 转出唯一定义。
 - **1.2 推荐当次输入与采用保存语义**：`loadSceneSnapshot` 改读首页当次 context（演示温度 tempSource='demo' 不进 AI；实时/手动温度带来源）；入队持久化输入快照（schema v5 增 `tasks.input_json`：当次场景 + 锁定单品别名），执行器按快照发送、不现读会话；提示词升 v2（锁定单品必须包含、温度标注来源）；`outfitSession` 增会话来源 origin，采用候选带 `source='ai'` + 理由，`planRepository` 按 Plan.source 落库（不再固定 manual）。
@@ -96,7 +122,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 
 ### M6 批次 2 决定落地与批次 3 本地部分（2026-11-03 项目用户确认，2026-11-04 实现）
 
-五项 M6 前决定（详见 [M6 实施计划](../docs/plans/2026-11-03-M6-真机质量验证与内测候选-实施计划.md) 批次 2）：APK 直接分发；导出/备份本期不做；内测包禁明文；人体尺寸内测前实现基础录入；生成正式 keystore。
+五项 M6 前决定（详见 [M6 实施计划](../docs/plans/archive/真机质量验证与内测候选/2026-11-03-M6-真机质量验证与内测候选-实施计划.md) 批次 2）：APK 直接分发；导出/备份本期不做；内测包禁明文；人体尺寸内测前实现基础录入；生成正式 keystore。
 
 **身材资料基础录入**（归属[个人资料管理](../docs/functions/个人资料管理.md)）：
 
@@ -120,7 +146,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 
 ### 核心目标能力改进批次（2026-11-04 实现完成，待真机走查）
 
-依据[能力改进建议](../docs/plans/archive/核心目标能力改进/2026-11-03-围绕核心目标的能力改进建议.md)与[计划落地代码评审](../docs/plans/archive/核心目标能力改进/2026-11-03-计划落地代码评审.md)，项目用户确认四项决定（任务范围=通勤/日常外出+上装/下装/鞋/外套≤2层、预览=文字路径+防偏闭环、D3 提前、放行口径=三层结论）后授权自主实施全部批次；实施决策 D-1～D-16 登记于[落地计划与决策记录](../docs/plans/2026-11-04-核心目标能力改进-落地计划与决策记录.md)。真实模型调用 0 次；效果结论未知。M6 批次 2 的身材链路在本批次中沿用并随提示词升 v4。
+依据[能力改进建议](../docs/plans/archive/核心目标能力改进/2026-11-03-围绕核心目标的能力改进建议.md)与[计划落地代码评审](../docs/plans/archive/核心目标能力改进/2026-11-03-计划落地代码评审.md)，项目用户确认四项决定（任务范围=通勤/日常外出+上装/下装/鞋/外套≤2层、预览=文字路径+防偏闭环、D3 提前、放行口径=三层结论）后授权自主实施全部批次；实施决策 D-1～D-16 登记于[落地计划与决策记录](../docs/plans/archive/核心目标能力改进/2026-11-04-核心目标能力改进-落地计划与决策记录.md)（2026-11-16 决策已全部销项）。真实模型调用 0 次；效果结论未知。M6 批次 2 的身材链路在本批次中沿用并随提示词升 v4。
 
 - **数据**：schema **v7**——`preview_checks`（C8 核对记录）、`preview_comparisons`（C5 比较组）、`plan_items.wear_style`（C4 逐件穿法）、`worn_records.reasons`（D3 反馈原因 JSON）。搭配契约升 **1.1.0**（`Plan.items` 可选 per-item wearStyle，顶层 wear 保留兼容；契约样例 9 组，package.json 同步 1.1.0）。
 - **衣物证据（A1/A2/A3）**：`getAnalysisView` 有效值改为"同名人工行优先、AI 行其次"（重新分析不再静默覆盖人工确认值，历史行保留可比较）；推荐/预览名称用户名称优先；新增 `services/ai/garmentView.ts` 归一化视图（关键特征/次要分层、主色 hex，推荐/预览/核对三处同源）与 `services/ai/evidenceCheck.ts`（锁定单品证据缺口提示，可跳过，不全柜拦截）。
@@ -133,7 +159,7 @@ items.status 新增 deleted（文本字段，无 schema 变更）。purgeItem �
 
 ### 全部计划评估修改方案 S0–S4（2026-11-04 实现完成，待真机走查）
 
-依据[全部计划评估第 8 节修改方案](../docs/plans/2026-11-04-全部计划落地实施评估.md)实施 F1–F8 修复与其余缺口收尾；实施记录见评估第 9 节。真实模型调用 0 次；回归 167/167 通过；真机走查、release 构建/验签与模型效果校准待执行。
+依据[全部计划评估第 8 节修改方案](../docs/plans/archive/核心目标能力改进/2026-11-04-全部计划落地实施评估.md)实施 F1–F8 修复与其余缺口收尾；实施记录见评估第 9 节。真实模型调用 0 次；回归 167/167 通过；真机走查、release 构建/验签与模型效果校准待执行。
 
 - **数据**：schema **v8**——`tasks.result_artifact_id`（当前产物指针，CAS 条件提交）、`preview_artifacts`（不可变产物：路径/实际 prompt/输入指纹/配置/尝试序号）、`preview_postprocess`（核对/纠偏生命周期 queued/checking/correcting/checked/unchecked/unknown/interrupted + 纠偏预算）、`pending_cleanup`（删除失败文件最小记录）、`preview_checks.artifact_id`（核对关联产物）、`preview_comparisons.artifact_a_id/artifact_b_id/conditions_json`（比较绑定产物与共同条件）。迁移与回读测试同批交付（`previewArtifacts.test.cjs`）。
 - **推荐 S1（F2/F8）**：新增 `services/ai/recommendationInput.ts`（`RecommendationInputV2`、`canonicalJson`、V2 指纹、安全解析）与 `services/ai/canonical.ts`（规范化 JSON，推荐/预览共用）。入队生成不可变快照（实际发送档案、realId/alias/revision、锁定真实 ID、场景具体日期 `localTargetDate`、基线、targetSlot）存 `tasks.input_json`；执行器不再现读衣橱——`validateSnapshotItems` 整体校验（缺件/版本不符标 stale 保留原请求），旧格式 queued 标 stale 不自动重发；`normalizeRecommendation` 增品类↔槽位一致与局部替换可变范围校验（只允许目标槽位变化，禁止新增槽位/改动保留件）；`evaluateAdoption`（store 纯函数）按快照复核会话基线/锁定——整套采用保留原请求锁定，局部采用走 `replaceSlot` 单次变更（撤销一次恢复采用前状态），旧记录/会话已变化拒绝采用并提示重新推荐；`RecommendationSheet.adopt` 与 `outfit.tsx aiSwapSlot`（传 targetSlot+baseline）接线。提示词升 **v5**：属性带人工确认标记（A1）、日期带具体日期、局部替换显式说明；`buildRecommendationInputKey`（别名版）删除。
