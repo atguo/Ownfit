@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>衣见 · 穿搭分析</title>
+<style>
+:root {
+  color-scheme: light;
+  --paper: #fafbf8;
+  --ink: #203b32;
+  --green: #24483e;
+  --muted: #53685e;
+  --line: #cdd9cc;
+  --soft: #eaf0e7;
+}
+* { box-sizing: border-box; }
+body {
+  height: 100dvh; margin: 0; overflow: hidden; display: flex; flex-direction: column;
+  background: var(--paper); color: var(--ink); font: 16px/1.55 "Microsoft YaHei", system-ui, sans-serif;
+}
+header, main { width: 100%; max-width: 1100px; margin: 0 auto; padding-inline: 24px; }
+header {
+  flex: 0 0 54px; display: flex; justify-content: space-between; align-items: center;
+  border-bottom: 1px solid var(--line); font-weight: 750;
+}
+header span { color: var(--muted); font-size: 14px; }
+main {
+  flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, .9fr) minmax(300px, 1fr);
+  gap: clamp(20px, 5vw, 68px); padding-top: 16px;
+}
+button, input { font: inherit; }
+button, .file-label {
+  min-height: 44px; border: 1px solid transparent; border-radius: 6px; padding: 8px 12px;
+  background: transparent; color: inherit; font-weight: 650; cursor: pointer;
+}
+button:focus-visible, summary:focus-visible, input:focus-visible, section:focus-visible, .file-label:focus-within {
+  outline: 2px solid #9b5e37; outline-offset: 2px;
+}
+.primary { background: var(--green); color: white; }
+.secondary { border-color: #8ba395; background: var(--paper); }
+button:hover, .file-label:hover { filter: brightness(.95); }
+.visual { min-width: 0; container-type: inline-size; }
+.stage {
+  height: min(calc(100dvh - 149px), 690px, 150cqw); display: flex; justify-content: center;
+  background: #e5e7e2; border-radius: 8px; overflow: hidden;
+}
+.photo {
+  height: 100%; max-width: 100%; aspect-ratio: 2/3; position: relative;
+  background-position: center; background-size: contain; background-repeat: no-repeat;
+}
+.mark {
+  position: absolute; left: clamp(4px, var(--x), calc(100% - 60px)); top: min(var(--y), calc(100% - 30px));
+  background: #24483e; color: #fff; min-height: 30px; padding: 3px 8px; border-color: white;
+  border-radius: 18px; font-size: 12px; white-space: nowrap;
+}
+.mark[aria-pressed=true] { background: white; color: var(--green); }
+.toolbar, .actions { display: flex; gap: 8px; align-items: center; }
+.toolbar { justify-content: space-between; padding-top: 6px; }
+.analysis {
+  min-height: 0; min-width: 0; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-gutter: stable; padding: 4px 7px 22px 3px;
+}
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: 16px; margin-bottom: 7px; }
+h2 { font-size: 20px; line-height: 1.35; }
+h3 { font-size: 16px; }
+.verdict {
+  padding: 10px 12px; background: var(--soft); border-left: 3px solid var(--green);
+  border-radius: 0 6px 6px 0;
+}
+.verdict p { margin-top: 4px; }
+.impact {
+  padding: 9px 4px; margin-top: 6px; border-bottom: 1px solid var(--line);
+  display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 10px;
+}
+.impact h2 { font-size: inherit; white-space: nowrap; }
+.impact p { color: var(--muted); }
+.actions { margin: 10px 0; flex-wrap: wrap; }
+.actions button { flex: 1 1 auto; }
+.evidence, .note, .response {
+  padding: 10px 12px; margin: 8px 0; border-radius: 6px; background: var(--soft);
+}
+details { border-top: 1px solid var(--line); }
+summary { padding: 12px 4px; font-weight: 700; cursor: pointer; }
+.factors { display: grid; margin: 2px 4px 12px; }
+.full-analysis { margin: 8px 0 14px; }
+.full-analysis > div { padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.full-analysis > div:first-child { border-top: 1px solid var(--line); }
+.factors p { color: var(--muted); margin-top: 3px; }
+.choices { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+.choices button { border-color: #99ac9f; font-size: 14px; }
+.choices button[aria-pressed=true] { background: var(--green); color: white; }
+.context label, .closet label { display: block; font-weight: 650; margin-top: 10px; }
+.closet input { width: 100%; padding: 8px; margin: 6px 0; border: 1px solid #99ac9f; border-radius: 6px; }
+.closet p { margin: 8px 0; }
+dialog { color: var(--ink); width: min(460px, 94vw); max-height: 90dvh; padding: 20px; border: 1px solid var(--line); border-radius: 12px; }
+dialog::backdrop { background: #17271fbf; }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dialog-head h2 { font-size: 22px; }
+.case-list { display: grid; gap: 8px; margin: 12px 0; }
+.case-list button { text-align: left; }
+.case-list small { display: block; font-weight: 400; }
+.file-label { display: inline-flex; align-items: center; }
+.file-label input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+[hidden] { display: none !important; }
+@media (max-width: 720px) {
+  header, main { padding-inline: 12px; }
+  header { flex-basis: 40px; font-size: 14px; }
+  main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 8px; padding-top: 8px; }
+  .stage { height: min(43dvh, calc(100dvh - 170px), 150cqw); }
+  .analysis { font-size: 14px; }
+  .verdict h2 { font-size: 18px; }
+  .actions { margin: 8px 0; }
+}
+</style>
+<header><strong>衣见</strong><span id="source-label">示例图 · 日常叠穿</span></header>
+<main>
+  <section class="visual" aria-label="参考图">
+    <div class="stage"><div class="photo" id="photo" role="group" aria-label="参考图">
+      <button class="mark" data-mark="0" hidden></button>
+      <button class="mark" data-mark="1" hidden></button>
+      <button class="mark" data-mark="2" hidden></button>
+    </div></div>
+    <div class="toolbar">
+      <button class="secondary" id="show-marks" aria-expanded="false" aria-controls="photo evidence">看图上细节</button>
+      <button class="primary" id="change">换一张图</button>
+    </div>
+  </section>
+  <section class="analysis" aria-label="穿搭分析" tabindex="0">
+    <p class="evidence" id="evidence" aria-live="polite" hidden></p>
+    <div id="result">
+      <h1>这套适合我吗？</h1>
+      <div class="verdict" aria-live="polite">
+        <h2 id="verdict-title"></h2>
+        <p id="fit-basis"></p>
+      </div>
+      <section class="impact" aria-labelledby="impact-title">
+        <h2 id="impact-title">拍摄影响</h2>
+        <p id="photo-impact"></p>
+      </section>
+      <div class="actions">
+        <button class="primary" id="edit-context" aria-expanded="false" aria-controls="context">结合我的偏好</button>
+        <button class="secondary" id="read-analysis" aria-expanded="false" aria-controls="factors">看完整分析</button>
+      </div>
+      <section class="context note" id="context" aria-label="我的穿衣偏好" hidden>
+        <label id="occasion-label">平常想穿去哪里？</label>
+        <div class="choices" role="group" aria-labelledby="occasion-label">
+          <button data-context="occasion" data-value="unknown">未指定</button>
+          <button data-context="occasion" data-value="work">通勤</button>
+          <button data-context="occasion" data-value="weekend">周末出门</button>
+        </div>
+        <label id="preference-label">平常怎么穿更自在？</label>
+        <div class="choices" role="group" aria-labelledby="preference-label">
+          <button data-context="preference" data-value="unknown">未指定</button>
+          <button data-context="preference" data-value="layered">喜欢叠穿</button>
+          <button data-context="preference" data-value="simple">喜欢轻便</button>
+        </div>
+        <p id="personal-note" role="status"></p>
+      </section>
+      <section class="factors full-analysis" id="factors" aria-label="完整分析" hidden>
+        <div><h3>为什么好看</h3><p id="appeal"></p></div>
+        <div><h3>照片和日常的差别</h3><p id="camera"></p></div>
+        <div><h3>版型和比例</h3><p id="proportion"></p></div>
+        <div><h3>妆容和发型的影响</h3><p id="styling"></p></div>
+      </section>
+      <details class="closet"><summary>有相近衣服，怎么借鉴？</summary>
+        <p id="adapt"></p>
+        <label for="garment">说说手边有什么（可选）</label>
+        <input id="garment" placeholder="例如：米白打底、黑色阔腿裤">
+        <button class="secondary" id="apply-garment">看已有单品的用法</button>
+        <p class="response" id="garment-result" role="status" hidden></p>
+      </details>
+      <details><summary>如果想添一件，先考虑什么？</summary>
+        <div class="factors"><div><h3 id="buy-title"></h3><p id="buy-reason"></p></div></div>
+      </details>
+    </div>
+    <section id="own-result" hidden>
+      <h1>已选中你的图片</h1>
+      <p class="note">这张图已在本机显示。原型的分析内容由两个示例演示。</p>
+      <button class="primary" id="pick-example">选择一个分析示例</button>
+    </section>
+  </section>
+</main>
+<dialog id="picker">
+  <div class="dialog-head"><h2>选择穿搭图</h2><button id="close">关闭</button></div>
+  <div class="case-list" aria-label="分析示例">
+    <button class="secondary" data-case="daily">日常叠穿<small>正面站姿 · 灰绿衬衫与阔腿裤</small></button>
+    <button class="secondary" data-case="street">长外套街拍<small>低机位与跨步 · 外套摆动明显</small></button>
+  </div>
+  <label class="file-label primary">从相册选图<input type="file" id="file" accept="image/*"></label>
+  <p id="file-error" role="status"></p>
+</dialog>
+<script src="inspiration.js"></script>
+</html>
