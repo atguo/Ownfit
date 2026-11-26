@@ -60,7 +60,28 @@ M0–M5 完成（M5 视同验收）；M6 进行中：批次 1/2 已收口，批�
 
 本目录：`pnpm exec expo prebuild -p android`（原生工程变更后重建 `android/`，该目录 git 忽略）；`pnpm exec expo run:android`（构建并安装到已连接真机）；`pnpm exec expo-doctor` 体检。真机连接走无线 adb（同 Wi-Fi 自动发现）；dev client 可用 deep link `ownfit://expo-development-client/?url=<Metro 地址>` 直接拉起指定服务器。
 
-构建依赖本机 Android Studio/SDK 与用户级环境变量（`ANDROID_HOME`、`JAVA_HOME`、`GRADLE_USER_HOME`），见根 AGENTS.md 第 5 节；支持系统版本 Android 12（minSdkVersion=31，经 `expo-build-properties` 配置于 app.json）。
+构建机的构建依赖其 Android Studio/SDK 与用户级环境变量（`ANDROID_HOME`、`JAVA_HOME`、`GRADLE_USER_HOME`），见根 AGENTS.md 第 5 节；支持系统版本 Android 12（minSdkVersion=31，经 `expo-build-properties` 配置于 app.json）。
+
+### 开发机 Android 模拟器（2026-11-25 搭建并实测）
+
+日常开发回归可在**开发机**（原先无 Android 工具链的那台）的模拟器上跑 debug 开发版，不占用真机；用于核心链路各环节（入库→推荐→预览→反馈）的工程回归，手机实拍照片可经脚本导入模拟器相册作为 AI 输入。**只算开发验证，不替代真机验收，也不能据此得出模型效果或真实试穿结论**（根 AGENTS.md 第 5 节验收要求不变）。
+
+- **环境**（全部在 `D:\tools`，便携安装，未改系统环境变量，无需管理员权限）：`jdk17`（Temurin 17.0.21.1，官方 SHA-256 已核对）；`AndroidSDK`（cmdline-tools 23.0、platform-tools 37.0.3、emulator 37.3.10、platforms/android-37.0、build-tools 36.0.0 与 37.0.0、ndk/27.1.12297006、cmake/3.22.1、system-images/android-36/google_apis/x86_64）；`gradle-home`（GRADLE_USER_HOME）；`android-user`（ANDROID_USER_HOME 与 ANDROID_EMULATOR_HOME：AVD、adb 密钥、`location.txt`）。AVD `ownfit_api36`：Android 16/API 36、x86_64 `google_apis` 镜像、系统语言 zh-CN，屏幕按 OPPO Find X9 Pro 设为 1272×2772@450dpi（布局按与手机相同的宽度计算），4GB 内存/4 核、显卡渲染、实体键盘输入；WHPX 硬件加速实测可用（与内存完整性、WSL2 共存）。开发机没有 release 签名材料，只能构建 debug 版。
+- **入口脚本** `D:\tools\ownfit-*.cmd`（`ownfit-android-env.cmd` 为共用环境；`ownfit-adb-start.cmd` 以独立进程启动 adb 服务并等其就绪——否则输出被管道捕获时 adb 后台进程会占住管道，调用方永远等不到结束）：
+  - `ownfit-run-android.cmd`：模拟器未开则自动启动并等开机 → 重放虚拟位置 → `expo run:android --device emulator-5554` → 启动 Metro 并拉起应用；Metro 经 adb reverse 以 `localhost:8081` 提供（`REACT_NATIVE_PACKAGER_HOSTNAME=localhost`），不依赖局域网 IP 与代理。可透传参数，如 `--no-bundler` 只装不启 Metro。
+  - `ownfit-emulator.cmd`：只开模拟器，可追加模拟器参数（`-camera-back webcam0` 用笔记本摄像头作后置相机、`-wipe-data` 恢复出厂）。
+  - `ownfit-push-photos.cmd`：把照片拖到脚本上即导入 `/sdcard/Pictures/Ownfit` 并触发相册索引。
+  - `ownfit-set-location.cmd <纬度> <经度>`：设置虚拟位置并记住（默认杭州 30.2741 120.1551）。
+  - `ownfit-adb-shell.cmd`：带好环境的命令行窗口。
+- **已实测（2026-11-25）**：首次原生构建约 14 分钟（含一次 ninja 长路径失败与修复），增量构建 4–12 秒；快照恢复后 4 秒内开机（冷启动 17–45 秒）；从零运行 `ownfit-run-android.cmd` 到应用加载完成不到 1 分钟；首页/衣橱/「我的」渲染正常，经虚拟定位取到真实天气（「杭州市 2–13℃ 雾」），相册导入可用，无 JS/原生致命错误日志。**未验证**：拍照与相机流程、AI 分析/推荐/预览在模拟器上的真实模型调用（需先在模拟器应用内配置模型）、长时间运行与滚动性能、手势与权限拒绝分支；ColorOS 特有行为（无 GMS、厂商定位与相册）无法在模拟器复现。
+- **本机已知坑**：
+  - SDK 自带 CMake 3.22.1 的 ninja 1.10.2 不支持超 260 字符路径（React Native 代码生成中间文件达 339 字符），已把 `D:\tools\AndroidSDK\cmake\3.22.1\bin\ninja.exe` 换成官方 ninja 1.13.2（发布页 SHA-256 已核对，原版留作 `ninja.exe.orig-1.10.2`）。SDK 管理器若重装或更新 `cmake;3.22.1`，构建会再报 `Filename longer than 260 characters`，需重换 ninja。
+  - 定位：expo-location 58 取缓存位置与实时定位都只走 Google 融合定位接口，模拟器内没有真实定位源；且系统「网络定位」未开启时它会触发 Google「位置信息精确度」提示，点「不用了」仍反复弹。`ownfit-set-location.cmd` 注册 `gps`/`network` 测试定位提供方并注入坐标，应用启动即取到位置且不再弹该提示；测试提供方随模拟器重启清空，`ownfit-run-android.cmd` 每次自动重放。纯 AOSP（无 Google 服务）镜像上应用定位必然失败（「暂时拿不到定位」），故用 `google_apis` 镜像。
+  - 模拟器自身联网经本机代理软件（模拟器读取已有 `HTTP_PROXY`），代理软件需保持运行；Metro 不受影响。
+  - Git Bash 里调 adb 时设备路径须加 `MSYS_NO_PATHCONV=1`；该变量设置后本地路径要写 `D:/...`，调用 `.cmd` 用 `cmd /c`（不是 `cmd //c`）。不要在输出被管道捕获的命令里直接调 adb 去首次启动 adb 服务（会卡住），先经 `ownfit-adb-start.cmd` 或把输出重定向到文件。
+  - 强制结束 Metro 或模拟器进程树后 adb 服务可能卡死：执行 `taskkill //IM adb.exe //F` 后重试。
+  - 直接运行 `emulator.exe` 会找不到 AVD（设备数据在 D 盘），须经脚本或先设 `ANDROID_USER_HOME`、`ANDROID_EMULATOR_HOME`。
+  - 构建与模拟器同时运行时，Windows 页面文件（C 盘）会临时增长约 3GB，重启后回落。
 
 ### 衣物删除联动（2026-10-29）
 
